@@ -6,7 +6,7 @@ services:
     environment:
       POSTGRES_DB: automation
       POSTGRES_USER: automation
-      POSTGRES_PASSWORD: local-dev-only-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only-password}
     ports:
       - "5432:5432"
     healthcheck:
@@ -73,7 +73,7 @@ services:
       CONTROL_PLANE_PORT: 8080
       DATABASE_URL: jdbc:postgresql://postgres:5432/automation
       POSTGRES_USER: automation
-      POSTGRES_PASSWORD: local-dev-only-password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only-password}
       PLATFORM_ALLOW_PRIVATE_TARGETS: "false"
       PLATFORM_ALLOWED_TARGET_HOSTS: ""
       RECORDER_SERVICE_URL: http://recorder:8090
@@ -112,5 +112,3 @@ services:
 
 volumes:
   postgres-data:
-    external: true
-    name: ai_test_automation_mvp_v011_postgres-data
