@@ -10,3 +10,12 @@ __pycache__/
 .vscode/
 .DS_Store
 runtime-artifacts/
+# Local databases / exports / test artifacts
+*.sql
+*.zip
+_backup*/
+backups/
+screenshots/
+traces/
+test-results/
+playwright-report/
