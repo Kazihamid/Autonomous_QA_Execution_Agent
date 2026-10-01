@@ -1,0 +1,55 @@
+name: fresh-clone-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fresh-clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap runtime env
+        run: cp .env.runtime.example .env.runtime
+
+      - name: Build full Docker stack
+        run: docker compose build
+
+      - name: Start full Docker stack
+        run: docker compose up -d
+
+      - name: Wait for service health
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_for() {
+            local name="$1"
+            local url="$2"
+            for i in {1..120}; do
+              if curl -fsS "$url" >/dev/null 2>&1; then
+                echo "$name is ready"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "$name did not become ready: $url"
+            docker compose ps
+            docker compose logs --tail=200
+            return 1
+          }
+
+          wait_for "Recorder" "http://localhost:8090/health"
+          wait_for "Code Generator" "http://localhost:8100/health"
+          wait_for "Runner" "http://localhost:8110/health"
+          wait_for "Control Plane" "http://localhost:8080/api/v1/health"
+          wait_for "Web" "http://localhost:3000/login"
+
+      - name: Show final container status
+        run: docker compose ps
+
+      - name: Tear down smoke-test stack
+        if: always()
+        run: docker compose down -v --remove-orphans
