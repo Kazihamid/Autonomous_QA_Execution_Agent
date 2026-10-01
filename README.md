@@ -85,7 +85,14 @@ Stopping the project with `docker compose down` preserves PostgreSQL data.
 
 A fresh clone creates a fresh PostgreSQL volume. Workspaces, applications, environments, recorded scenarios, Automation IR versions, and execution history are database data and are not stored in GitHub.
 
-Use database backup/restore for moving existing runtime data between machines.
+Use the included PowerShell scripts for moving runtime data between machines:
+
+```powershell
+.\scripts\backup-db.ps1
+.\scripts\restore-db.ps1 -BackupFile .\backups\automation_YYYYMMDD_HHMMSS.dump
+```
+
+The restore command requires typing `RESTORE` before changing the local database.
 
 ## Target-environment access
 
