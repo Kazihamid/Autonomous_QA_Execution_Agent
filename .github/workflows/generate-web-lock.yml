@@ -1,9 +1,9 @@
 name: generate-web-lock
 
 on:
-  push:
+  pull_request:
     branches:
-      - chore/reproducible-web-builds
+      - main
 
 permissions:
   contents: write
