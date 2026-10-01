@@ -1,0 +1,81 @@
+﻿{
+  "info": {
+    "name": "Autonomous QA Execution Agent - MVP Vertical Slice 1",
+    "description": "Authentication(dev identity), Workspace, Application, Environment and target-policy smoke flow.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {"key":"baseUrl","value":"http://localhost:8080"},
+    {"key":"workspaceId","value":""},
+    {"key":"applicationId","value":""}
+  ],
+  "auth": {"type":"noauth"},
+  "event": [],
+  "item": [
+    {
+      "name":"01 - Current User",
+      "request":{"method":"GET","header":[
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"url":{"raw":"{{baseUrl}}/api/v1/me","host":["{{baseUrl}}"],"path":["api","v1","me"]}}
+    },
+    {
+      "name":"02 - Create Workspace",
+      "event":[{"listen":"test","script":{"exec":["pm.test('Created', () => pm.expect(pm.response.code).to.eql(201));","const b=pm.response.json(); pm.collectionVariables.set('workspaceId', b.id);"]}}],
+      "request":{"method":"POST","header":[
+        {"key":"Content-Type","value":"application/json"},
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"body":{"mode":"raw","raw":"{\n  \"name\": \"SQA Automation\",\n  \"key\": \"SQA_AUTO\",\n  \"description\": \"MVP Slice 1 Postman workspace\"\n}"},"url":{"raw":"{{baseUrl}}/api/v1/workspaces","host":["{{baseUrl}}"],"path":["api","v1","workspaces"]}}
+    },
+    {
+      "name":"03 - Create Application",
+      "event":[{"listen":"test","script":{"exec":["pm.test('Created', () => pm.expect(pm.response.code).to.eql(201));","const b=pm.response.json(); pm.collectionVariables.set('applicationId', b.id);"]}}],
+      "request":{"method":"POST","header":[
+        {"key":"Content-Type","value":"application/json"},
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"body":{"mode":"raw","raw":"{\n  \"name\": \"HRMS PoC\",\n  \"description\": \"Application under test\"\n}"},"url":{"raw":"{{baseUrl}}/api/v1/workspaces/{{workspaceId}}/applications","host":["{{baseUrl}}"],"path":["api","v1","workspaces","{{workspaceId}}","applications"]}}
+    },
+    {
+      "name":"04 - Validate Safe Target",
+      "request":{"method":"POST","header":[
+        {"key":"Content-Type","value":"application/json"},
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"body":{"mode":"raw","raw":"{\n  \"url\": \"https://qa.example.invalid\"\n}"},"url":{"raw":"{{baseUrl}}/api/v1/workspaces/{{workspaceId}}/applications/{{applicationId}}/target-validation","host":["{{baseUrl}}"],"path":["api","v1","workspaces","{{workspaceId}}","applications","{{applicationId}}","target-validation"]}}
+    },
+    {
+      "name":"05 - Validate Blocked Localhost",
+      "event":[{"listen":"test","script":{"exec":["pm.test('Policy blocks localhost', () => pm.expect(pm.response.code).to.eql(422));"]}}],
+      "request":{"method":"POST","header":[
+        {"key":"Content-Type","value":"application/json"},
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"body":{"mode":"raw","raw":"{\n  \"url\": \"http://localhost:8080\"\n}"},"url":{"raw":"{{baseUrl}}/api/v1/workspaces/{{workspaceId}}/applications/{{applicationId}}/target-validation","host":["{{baseUrl}}"],"path":["api","v1","workspaces","{{workspaceId}}","applications","{{applicationId}}","target-validation"]}}
+    },
+    {
+      "name":"06 - Create Environment",
+      "request":{"method":"POST","header":[
+        {"key":"Content-Type","value":"application/json"},
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"body":{"mode":"raw","raw":"{\n  \"name\": \"QA\",\n  \"baseUrl\": \"https://qa.example.invalid\",\n  \"defaultBrowser\": \"CHROMIUM\",\n  \"headlessDefault\": true,\n  \"allowRecording\": true,\n  \"allowExecution\": true\n}"},"url":{"raw":"{{baseUrl}}/api/v1/workspaces/{{workspaceId}}/applications/{{applicationId}}/environments","host":["{{baseUrl}}"],"path":["api","v1","workspaces","{{workspaceId}}","applications","{{applicationId}}","environments"]}}
+    },
+    {
+      "name":"07 - List Environments",
+      "request":{"method":"GET","header":[
+        {"key":"X-Dev-User-Sub","value":"postman-user-001"},
+        {"key":"X-Dev-User-Email","value":"postman.qa@example.invalid"},
+        {"key":"X-Dev-User-Name","value":"Postman QA"}
+      ],"url":{"raw":"{{baseUrl}}/api/v1/workspaces/{{workspaceId}}/applications/{{applicationId}}/environments","host":["{{baseUrl}}"],"path":["api","v1","workspaces","{{workspaceId}}","applications","{{applicationId}}","environments"]}}
+    }
+  ]
+}
+

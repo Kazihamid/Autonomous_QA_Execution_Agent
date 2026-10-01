@@ -1,0 +1,76 @@
+﻿package com.brac.automation.platform.recorder;
+
+import java.util.List;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+import tools.jackson.databind.JsonNode;
+
+@Component
+public class RecorderWorkerClient {
+    private final RestClient client;
+
+    public RecorderWorkerClient(@Value("${platform.recorder.base-url}") String baseUrl) {
+        this.client = RestClient.builder().baseUrl(baseUrl).build();
+    }
+
+    public WorkerSession create(String startUrl, String browser, String scenarioName) {
+        try {
+            return client.post().uri("/api/v1/sessions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new CreateRequest(startUrl, browser.toLowerCase(), false, scenarioName))
+                .retrieve().body(WorkerSession.class);
+        } catch (RestClientException ex) {
+            throw new RecorderWorkerException("Recorder worker could not create the managed browser session: " + ex.getMessage(), ex);
+        }
+    }
+
+    public WorkerSession command(String workerSessionId, String command) {
+        try {
+            return client.post().uri("/api/v1/sessions/{id}/{command}", workerSessionId, command)
+                .retrieve().body(WorkerSession.class);
+        } catch (RestClientException ex) {
+            throw new RecorderWorkerException("Recorder worker command failed: " + command + ". " + ex.getMessage(), ex);
+        }
+    }
+
+    public void addAssertion(String workerSessionId, String selector, String assertionType, String expected) {
+        try {
+            client.post().uri("/api/v1/sessions/{id}/assertions", workerSessionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new AssertionRequest(selector, assertionType, expected))
+                .retrieve().toBodilessEntity();
+        } catch (RestClientException ex) {
+            throw new RecorderWorkerException("Recorder assertion could not be added: " + ex.getMessage(), ex);
+        }
+    }
+
+    public void addCheckpoint(String workerSessionId, String description) {
+        try {
+            client.post().uri("/api/v1/sessions/{id}/checkpoints", workerSessionId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(new CheckpointRequest(description))
+                .retrieve().toBodilessEntity();
+        } catch (RestClientException ex) {
+            throw new RecorderWorkerException("Recorder checkpoint could not be added: " + ex.getMessage(), ex);
+        }
+    }
+
+    public FinishResponse finish(String workerSessionId) {
+        try {
+            return client.post().uri("/api/v1/sessions/{id}/finish", workerSessionId)
+                .retrieve().body(FinishResponse.class);
+        } catch (RestClientException ex) {
+            throw new RecorderWorkerException("Recorder worker could not finish the session: " + ex.getMessage(), ex);
+        }
+    }
+
+    public record CreateRequest(String startUrl, String browser, boolean headless, String scenarioName) {}
+    public record AssertionRequest(String selector, String assertionType, String expected) {}
+    public record CheckpointRequest(String description) {}
+    public record WorkerSession(String sessionId, String startUrl, String scenarioName, String browser, boolean headless, String status, String createdAt, String error) {}
+    public record FinishResponse(WorkerSession session, int rawEventCount, int semanticActionCount, List<String> errors, JsonNode ir) {}
+}
+

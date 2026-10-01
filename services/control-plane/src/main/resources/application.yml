@@ -1,0 +1,49 @@
+server:
+  port: ${CONTROL_PLANE_PORT:8080}
+
+spring:
+  application:
+    name: automation-control-plane
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/automation}
+    username: ${POSTGRES_USER:automation}
+    password: ${POSTGRES_PASSWORD:}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+
+platform:
+  target-policy:
+    allow-private-targets: ${PLATFORM_ALLOW_PRIVATE_TARGETS:false}
+    allowed-hosts: ${PLATFORM_ALLOWED_TARGET_HOSTS:}
+  recorder:
+    base-url: ${RECORDER_SERVICE_URL:http://localhost:8090}
+  code-generator:
+    base-url: ${CODE_GENERATOR_SERVICE_URL:http://localhost:8100}
+  runner:
+    base-url: ${RUNNER_SERVICE_URL:http://localhost:8110}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: "!dev"
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:}

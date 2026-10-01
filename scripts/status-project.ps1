@@ -1,0 +1,2 @@
+$Root = Split-Path -Parent $PSScriptRoot; Set-Location $Root; docker compose -f docker-compose.yml ps; Write-Host ""
+foreach($x in @(@("Backend","http://localhost:8080/api/v1/health"),@("Recorder","http://localhost:8090/health"),@("Code Generator","http://localhost:8100/health"),@("Runner","http://localhost:8110/health"))){try{$h=Invoke-RestMethod -Uri $x[1] -TimeoutSec 2;Write-Host "$($x[0]) health: $($h.status)" -ForegroundColor Green}catch{Write-Host "$($x[0]) health: unavailable" -ForegroundColor Red}}

@@ -1,0 +1,205 @@
+﻿openapi: 3.1.0
+info:
+  title: Autonomous QA Execution Agent Control Plane API
+  version: 0.2.0
+  description: MVP Vertical Slices 1-2 - Identity, Workspace, Application, Environment, Recorder and Scenario Repository.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/me:
+    get:
+      operationId: getCurrentUser
+      responses: {'200': {description: Current user}}
+  /api/v1/workspaces:
+    get:
+      operationId: listWorkspaces
+      responses: {'200': {description: Workspaces}}
+    post:
+      operationId: createWorkspace
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreateWorkspaceRequest'}}}
+      responses: {'201': {description: Created workspace}}
+  /api/v1/workspaces/{workspaceId}:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: getWorkspace
+      responses: {'200': {description: Workspace}}
+  /api/v1/workspaces/{workspaceId}/members:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: listWorkspaceMembers
+      responses: {'200': {description: Members}}
+    post:
+      operationId: addWorkspaceMember
+      responses: {'201': {description: Member added or role updated}}
+  /api/v1/workspaces/{workspaceId}/applications:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: listApplications
+      responses: {'200': {description: Applications}}
+    post:
+      operationId: createApplication
+      responses: {'201': {description: Application created}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+    get:
+      operationId: getApplication
+      responses: {'200': {description: Application}}
+    put:
+      operationId: updateApplication
+      responses: {'200': {description: Application updated}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/environments:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+    get:
+      operationId: listEnvironments
+      responses: {'200': {description: Environments}}
+    post:
+      operationId: createEnvironment
+      responses: {'201': {description: Environment created}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/environments/{environmentId}:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+      - {$ref: '#/components/parameters/EnvironmentId'}
+    put:
+      operationId: updateEnvironment
+      responses: {'200': {description: Environment updated}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/target-validation:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+    post:
+      operationId: validateEnvironmentTarget
+      responses:
+        '200': {description: Target URL accepted by configuration-time policy}
+        '422': {description: Target blocked by SSRF/security policy}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/environments/{environmentId}/recording-sessions:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+      - {$ref: '#/components/parameters/EnvironmentId'}
+    post:
+      operationId: createRecordingSession
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreateRecordingSessionRequest'}}}
+      responses:
+        '201': {description: Managed browser session provisioned}
+        '422': {description: Environment is not recordable or target policy failed}
+        '502': {description: Recorder Worker could not provision the browser}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+    get:
+      operationId: listRecordingSessions
+      responses: {'200': {description: Recording sessions}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+      - {$ref: '#/components/parameters/SessionId'}
+    get:
+      operationId: getRecordingSession
+      responses: {'200': {description: Recording session}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/start:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: startRecording
+      responses: {'200': {description: Recording started}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/pause:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: pauseRecording
+      responses: {'200': {description: Recording paused}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/resume:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: resumeRecording
+      responses: {'200': {description: Recording resumed}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/finish:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: finishRecording
+      responses: {'200': {description: Recording normalized and Automation IR built}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/cancel:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: cancelRecording
+      responses: {'200': {description: Recording cancelled}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/assertions:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: addRecorderAssertion
+      responses: {'204': {description: Assertion captured}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/checkpoints:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: addRecorderCheckpoint
+      responses: {'204': {description: Checkpoint captured}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/recording-sessions/{sessionId}/scenarios:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}, {$ref: '#/components/parameters/SessionId'}]
+    post:
+      operationId: saveRecordingAsScenario
+      responses: {'201': {description: Scenario version 1 created}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenarios:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/ApplicationId'}]
+    get:
+      operationId: listScenarios
+      responses: {'200': {description: Scenario repository}}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenarios/{scenarioId}:
+    parameters:
+      - {$ref: '#/components/parameters/WorkspaceId'}
+      - {$ref: '#/components/parameters/ApplicationId'}
+      - {$ref: '#/components/parameters/ScenarioId'}
+    get:
+      operationId: getScenarioVersion
+      responses: {'200': {description: Scenario with current Automation IR}}
+components:
+  parameters:
+    WorkspaceId:
+      name: workspaceId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    ApplicationId:
+      name: applicationId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    EnvironmentId:
+      name: environmentId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    ScenarioId:
+      name: scenarioId
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  schemas:
+    CreateWorkspaceRequest:
+      type: object
+      required: [name, key]
+      properties:
+        name: {type: string, maxLength: 200}
+        key: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{1,39}$'}
+        description: {type: [string, 'null'], maxLength: 1000}
+    CreateRecordingSessionRequest:
+      type: object
+      required: [scenarioName]
+      properties:
+        scenarioName: {type: string, maxLength: 200}
+        moduleName: {type: [string, 'null'], maxLength: 120}
+        featureName: {type: [string, 'null'], maxLength: 120}
+
