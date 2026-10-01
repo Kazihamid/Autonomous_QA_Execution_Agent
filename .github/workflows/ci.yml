@@ -46,3 +46,40 @@ jobs:
       - run: npm install
       - run: npm run typecheck
       - run: npm run build
+
+  recorder:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: services/recorder-service}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q
+
+  code-generator:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: services/code-generator-service}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt pytest
+      - run: pytest -q
+
+  runner:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: services/runner-service}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r requirements.txt
+      - run: python -m compileall -q app
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.runtime.example .env.runtime
+      - run: docker compose config --quiet
