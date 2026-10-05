@@ -1,4 +1,5 @@
 name: handover-package
+# Packages a clean Claude handover source ZIP
 
 on:
   push:
