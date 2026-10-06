@@ -223,23 +223,23 @@ public class RecorderService {
     }
 
     /** Applies parameter default and secret-name edits to the IR. Validates every key and value. */
-    private void applyEdits(ObjectNode ir, java.util.Map<String,String> params, java.util.Map<String,String> secrets) {
-        if (params != null) {
+    private void applyEdits(ObjectNode ir, java.util.Map<String,String> paramEdits, java.util.Map<String,String> secretEdits) {
+        if (paramEdits != null) {
             JsonNode params = ir.path("parameters");
-            for (var e : params.entrySet()) {
+            for (var e : paramEdits.entrySet()) {
                 JsonNode p = params.get(e.getKey());
                 if (p == null || !p.isObject()) throw new IllegalArgumentException("Unknown parameter: " + e.getKey());
                 if (e.getValue() == null || e.getValue().length() > 2000) throw new IllegalArgumentException("Invalid value for parameter: " + e.getKey());
                 ((ObjectNode) p).put("default", e.getValue());
             }
         }
-        if (secrets != null && !secrets.isEmpty()) {
+        if (secretEdits != null && !secretEdits.isEmpty()) {
             java.util.Set<String> known = new java.util.HashSet<>();
             for (JsonNode step : ir.path("steps")) {
                 JsonNode v = step.get("value");
                 if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) known.add(v.path("reference").asText());
             }
-            for (var e : secrets.entrySet()) {
+            for (var e : secretEdits.entrySet()) {
                 if (!known.contains(e.getKey())) throw new IllegalArgumentException("Unknown secret reference: " + e.getKey());
                 if (e.getValue() == null || !SECRET_NAME.matcher(e.getValue()).matches()) {
                     throw new IllegalArgumentException("Secret names must be letters, digits and underscores (for example SECRET_PASSWORD_ENV27).");
@@ -248,7 +248,7 @@ public class RecorderService {
             for (JsonNode step : ir.path("steps")) {
                 JsonNode v = step.get("value");
                 if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) {
-                    String replacement = secrets.get(v.path("reference").asText());
+                    String replacement = secretEdits.get(v.path("reference").asText());
                     if (replacement != null) ((ObjectNode) v).put("reference", replacement);
                 }
             }

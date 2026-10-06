@@ -55,6 +55,14 @@ services:
     env_file:
       - path: .env.runtime
         required: false
+    volumes:
+      # Read again on every run, so a changed password takes effect without restarting the runner.
+      - type: bind
+        source: ./.env.runtime
+        target: /run/runtime/.env.runtime
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "127.0.0.1:8110:8110"
     shm_size: "1gb"

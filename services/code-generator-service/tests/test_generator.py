@@ -119,3 +119,33 @@ def test_python_conftest_reports_failure_diagnostics():
     conf = next(x['content'] for x in out['files'] if x['path'] == 'tests/conftest.py')
     ast.parse(conf)
     assert "pytest_runtest_makereport" in conf and "[IR-FAIL]" in conf and "select elements on page" in conf
+
+
+def test_python_waits_for_sign_in_before_next_navigation():
+    import ast, copy
+    ir = copy.deepcopy(IR)
+    ir["steps"] = ir["steps"] + [{"id": "step-005", "action": "navigate", "url": "https://qa.example.com/orders"}]
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    test = next(x['content'] for x in out['files'] if x['path'].startswith('tests/test_'))
+    ast.parse(test)
+    assert "def _settle(" in test and "Sign-in did not complete" in test
+    body = test.split("# IR-STEP: step-005")[1]
+    assert body.index("_settle(page)") < body.index("_goto_with_retry")
+    # no settle when the previous step is not a click/keyboard
+    assert test.split("# IR-STEP: step-002")[1].split("# IR-STEP: step-003")[0].count("_settle(page)") == 0
+
+
+def test_numeric_table_target_selects_first_row_not_the_recorded_pin():
+    import ast, copy
+    ir = copy.deepcopy(IR)
+    ir["elements"]["00155708"] = {"preferred": {"strategy": "text", "value": "00155708"}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [{"id": "step-005", "action": "click", "element": "00155708"}]
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    test = next(x['content'] for x in out['files'] if x['path'].startswith('tests/test_'))
+    ast.parse(test)
+    body = test.split("# IR-STEP: step-005")[1]
+    assert "tbody tr:not(:has(td.dataTables_empty))" in body and "[IR-ROW]" in body
+    assert "press_sequentially" not in body  # the recorded PIN is no longer typed into the search box
+    assert 'for _how in ("link", "cell", "row", "double")' in body and "row picked by" in body and "[IR-ROW-HTML]" in body

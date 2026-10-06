@@ -81,7 +81,7 @@ public class RecorderWorkerClient {
             postJsonNoResponse("/api/v1/sessions/" + workerSessionId + "/paste", new PasteRequest(text));
         } catch (RecorderWorkerException ex) {
             // Never echo the text: it may be a password.
-            throw new RecorderWorkerException("Text could not be pasted into the managed browser. Click the field in the browser first. " + ex.getMessage().replace(text, "***"), ex);
+            throw new RecorderWorkerException("Text could not be pasted into the managed browser. Click the field in the browser first. " + String.valueOf(ex.getMessage()).replace(text, "***"), ex);
         }
     }
 

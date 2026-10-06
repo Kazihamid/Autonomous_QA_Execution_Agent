@@ -96,7 +96,7 @@ export default function EditScenario(){
 
       <section className="card" style={{marginTop:16}}>
         <h2>Secrets (passwords and tokens)</h2>
-        <p className="muted">Passwords are never stored in a scenario. Each one is a <b>secret name</b>; its value is read from the runner&apos;s <code>.env.runtime</code> file when the test runs. To use a different password (for example on another environment), enter a new secret name here, add <code>NEW_NAME=the-password</code> to <code>.env.runtime</code>, and restart the runner.</p>
+        <p className="muted">Passwords are never stored in a scenario. Each one is a <b>secret name</b> (for example <code>SECRET_PASSWORD</code>), not the password itself. When the test runs, the runner reads the password from <code>.env.runtime</code> using the environment and user being tested: <code>NAME_ENV_USER</code>, then <code>NAME_ENV</code>, then <code>NAME_USER</code>, then <code>NAME</code> (for example <code>SECRET_PASSWORD_ENV27</code> for every user on env27). You normally do not need to change the name here.</p>
         {Object.keys(secrets).length===0?<div className="empty">This scenario uses no secrets.</div>:
         <table className="table form-table"><thead><tr><th>Current secret name</th><th>New secret name</th><th>Used by</th></tr></thead><tbody>
           {Object.keys(secrets).map(k=><tr key={k}><td><code>{k}</code></td><td><input value={secrets[k]} onChange={e=>setSecrets({...secrets,[k]:e.target.value})} placeholder="e.g. SECRET_PASSWORD_ENV27"/><div className="field-hint">Letters, digits and underscores only.</div></td><td className="muted small-note">{(usage[k]||[]).join(", ")||"—"}</td></tr>)}

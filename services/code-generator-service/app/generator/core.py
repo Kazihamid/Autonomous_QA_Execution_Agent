@@ -273,6 +273,27 @@ def _secret_scan(files: dict[str,str]) -> dict[str,Any]:
             if re.search(pat,content): findings.append({'file':path,'pattern':pat})
     return {'status':'PASS' if not findings else 'FAIL','findings':findings}
 
+_SETTLE_HELPER = '''import re
+
+_SIGN_IN_URL = re.compile(r"/(idp|auth)/realms/|/protocol/openid-connect/|/login-actions/")
+
+
+def _settle(page, timeout=25000):
+    # Let a submitted form or redirect chain (for example an OIDC sign-in) finish before the next step navigates away.
+    page.wait_for_timeout(500)
+    if _SIGN_IN_URL.search(page.url):
+        try:
+            page.wait_for_url(lambda u: not _SIGN_IN_URL.search(u), timeout=timeout)
+        except Exception:
+            raise RuntimeError("Sign-in did not complete: the browser is still on the sign-in page after the credentials were submitted. Check the user name, and that the password secret for this environment is set in .env.runtime.")
+    try:
+        page.wait_for_load_state("networkidle", timeout=timeout)
+    except Exception:
+        pass
+
+
+'''
+
 def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     scenario=ir.get('scenario') or {}; scenario_name=scenario.get('name','Generated Scenario')
     module=_snake(scenario_name); cls=_pascal(scenario_name)+'Page'; test_fn='test_'+_snake(scenario_name)
@@ -302,6 +323,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
     lines=['import base64','import os','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
+    _i=lines.index('def _goto_with_retry(page, url):'); lines[_i:_i]=_SETTLE_HELPER.split('\n')
     source_map={}
     ordered_steps=_ordered_steps(ir)
     for step_index,step in enumerate(ordered_steps):
@@ -309,6 +331,8 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         lines.append(f'    # IR-STEP: {sid}')
         lines.append(f'    print("[IR-STEP] {sid} {action} ({step_index+1}/{len(ordered_steps)})", flush=True)')
         if action=='navigate':
+            if step_index>0 and ordered_steps[step_index-1].get('action') in {'click','keyboard'}:
+                lines.append('    _settle(page)')
             dynamic_state=_dynamic_timestamp_state(step.get('url'))
             if dynamic_state:
                 prefix,suffix=dynamic_state
@@ -334,12 +358,9 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 next_step=ordered_steps[step_index+1] if step_index+1 < len(ordered_steps) else {}
                 prev_step=ordered_steps[step_index-1] if step_index > 0 else {}
                 prev_key=str(prev_step.get('element') or '').lower()
-                numeric_table_target=(
-                    str(key or '').isdigit()
-                    and len(str(key or '')) >= 6
-                    and prev_step.get('action')=='click'
-                    and 'search' in prev_key
-                )
+                # A recorded numeric id (for example an employee PIN) inside a data table is a record the tester picked from the list.
+                # Records are consumed by earlier runs, so the generated test selects the first available row instead.
+                numeric_table_target=str(key or '').isdigit() and len(str(key or '')) >= 6
                 redundant_field_click=(
                     key
                     and next_step.get('element')==key
@@ -350,16 +371,50 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 elif key and _is_accidental_container_click(element):
                     lines.append(f'    # Skipped recorder container click for {key}; not a real actionable control.')
                 elif numeric_table_target:
-                    lines.append('    _table_search = page.locator(".dataTables_wrapper:visible input[aria-controls], .dataTables_wrapper:visible input[type=search]").first')
-                    lines.append('    if _table_search.count() > 0 and _table_search.is_visible():')
-                    lines.append('        _table_search.click()')
-                    lines.append('        _table_search.fill("")')
-                    lines.append(f'        _table_search.press_sequentially({_json(str(key))}, delay=120)')
-                    lines.append('        page.wait_for_timeout(1200)')
-                    lines.append(f'    if {loc}.count() == 0:')
-                    lines.append(f'        raise RuntimeError({_json("Recorded table target "+str(key)+" was not found in the current search results. Update the runtime test data or re-record this selection.")})')
-                    lines.append(f'    {loc}.first.wait_for(state="visible", timeout=5000)')
-                    lines.append(f'    {loc}.first.click(timeout=5000)')
+                    lines.append('    _grid = page.locator(".dataTables_wrapper:visible")')
+                    lines.append('    try:')
+                    lines.append('        _grid.last.wait_for(state="visible", timeout=10000)')
+                    lines.append('    except Exception:')
+                    lines.append('        pass')
+                    lines.append('    if _grid.count() > 0:')
+                    lines.append('        _grid = _grid.last')
+                    lines.append('        _search = _grid.locator("input[type=search], input[aria-controls]").first')
+                    lines.append('        if _search.count() > 0 and _search.is_visible() and _search.input_value():')
+                    lines.append('            _search.fill("")')
+                    lines.append('            page.wait_for_timeout(1000)')
+                    lines.append('        _row = _grid.locator("tbody tr:not(:has(td.dataTables_empty))").first')
+                    lines.append('        try:')
+                    lines.append('            _row.wait_for(state="visible", timeout=15000)')
+                    lines.append('        except Exception:')
+                    lines.append(f'            raise RuntimeError({_json("The table has no rows to select (recorded target "+str(key)+"). Make sure the list contains at least one record.")})')
+                    lines.append('        print("[IR-ROW] selecting first row: " + " | ".join(t.strip() for t in _row.locator("td").all_inner_texts())[:200], flush=True)')
+                    lines.append('        try:')
+                    lines.append('            print("[IR-ROW-HTML] " + _row.evaluate("e => e.outerHTML")[:400], flush=True)')
+                    lines.append('        except Exception:')
+                    lines.append('            pass')
+                    lines.append('        _picked = ""')
+                    lines.append('        for _how in ("link", "cell", "row", "double"):')
+                    lines.append('            try:')
+                    lines.append('                if _how == "link":')
+                    lines.append('                    _t = _row.locator("a, button")')
+                    lines.append('                    if _t.count() == 0:')
+                    lines.append('                        continue')
+                    lines.append('                    _t.first.click(timeout=3000)')
+                    lines.append('                elif _how == "cell":')
+                    lines.append('                    _row.locator("td").first.click(timeout=3000)')
+                    lines.append('                elif _how == "row":')
+                    lines.append('                    _row.click(timeout=3000)')
+                    lines.append('                else:')
+                    lines.append('                    _row.dblclick(timeout=3000)')
+                    lines.append('            except Exception:')
+                    lines.append('                continue')
+                    lines.append('            page.wait_for_timeout(1200)')
+                    lines.append('            if not _grid.is_visible():')
+                    lines.append('                _picked = _how')
+                    lines.append('                break')
+                    lines.append('        print("[IR-ROW] row picked by " + (_picked or "no method; the list stayed open"), flush=True)')
+                    lines.append('    else:')
+                    lines.append(f'        {loc}.first.click(timeout=5000)')
                 elif key and _is_optional_dismiss(element):
                     lines.append(f'    if {loc}.count() > 0 and {loc}.first.is_visible():')
                     lines.append(f'        {loc}.first.click(timeout=3000)')
@@ -478,6 +533,33 @@ def _diagnose(pg):
     try:
         text = " ".join(pg.inner_text("body", timeout=3000).split())
         say("visible text: " + text[:500])
+        say("visible text (end of page): " + text[-600:])
+    except Exception:
+        pass
+    try:
+        fields = pg.eval_on_selector_all("input:not([type=password]), textarea", "els => els.filter(e => e.id).map(e => e.id + (e.offsetParent === null ? ' [hidden]' : ' [visible]') + (e.value ? ' =' + String(e.value).slice(0, 20) : ''))")
+        fields = [f for f in fields if not f.startswith("session")]
+        say("input fields: " + (", ".join(fields[:120]) if fields else "none"))
+    except Exception:
+        pass
+    try:
+        hits = pg.eval_on_selector_all("[id*=contact i], [name*=contact i], [placeholder*=contact i]", "els => els.map(e => e.tagName + '#' + (e.id || e.name || '?') + (e.offsetParent === null ? ' [hidden]' : ' [visible]'))")
+        say("elements named contact: " + (", ".join(hits) if hits else "none"))
+    except Exception:
+        pass
+    try:
+        chosen = pg.eval_on_selector_all("select", "els => els.filter(e => e.id && e.id.indexOf('_length') < 0).map(e => e.id + '=' + (e.options[e.selectedIndex] ? e.options[e.selectedIndex].text : '(none)'))")
+        say("selected options: " + "; ".join(chosen))
+    except Exception:
+        pass
+    try:
+        form = " ".join(pg.inner_text("form", timeout=3000).split())
+        say("form text: " + form[:900])
+    except Exception:
+        pass
+    try:
+        modals = pg.eval_on_selector_all(".modal", "els => els.map(e => (e.id || '(no id)') + (e.offsetParent === null ? ' [hidden]' : ' [open]'))")
+        say("modal dialogs: " + (", ".join(modals) if modals else "none"))
     except Exception:
         pass
 
