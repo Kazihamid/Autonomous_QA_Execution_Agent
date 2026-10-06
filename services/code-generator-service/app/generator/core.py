@@ -7,7 +7,7 @@ import keyword
 import re
 from pathlib import PurePosixPath
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit
 
 SUPPORTED_ACTIONS = {"navigate","click","fill","select","check","uncheck","uploadFile","keyboard","assert","checkpoint","extractValue","wait"}
 PY_RESERVED = set(keyword.kwlist)
@@ -202,6 +202,16 @@ def _dynamic_timestamp_state(url: Any) -> tuple[str,str] | None:
     except Exception:
         return None
 
+def _origin(url: Any) -> str:
+    try:
+        p=urlsplit(str(url))
+        return f"{p.scheme}://{p.netloc}" if p.scheme and p.netloc else ''
+    except Exception:
+        return ''
+
+def _embeds_origin(text: str, origin: str) -> bool:
+    return bool(origin) and (quote_plus(origin) in text or origin in text)
+
 def _relative_url(url: Any) -> str:
     if not url: return '/'
     try:
@@ -291,21 +301,26 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files={}
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
-    lines=['import base64','import os','import time','from pathlib import Path','from urllib.parse import quote','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
+    lines=['import base64','import os','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
     source_map={}
     ordered_steps=_ordered_steps(ir)
     for step_index,step in enumerate(ordered_steps):
         sid=str(step['id']); action=step['action']; source_map[sid]={'file':f'tests/test_{module}.py','line':len(lines)+1}
         lines.append(f'    # IR-STEP: {sid}')
+        lines.append(f'    print("[IR-STEP] {sid} {action} ({step_index+1}/{len(ordered_steps)})", flush=True)')
         if action=='navigate':
             dynamic_state=_dynamic_timestamp_state(step.get('url'))
             if dynamic_state:
                 prefix,suffix=dynamic_state
+                origin=_origin(step.get('url'))
+                prefix_expr=f'_rebase({_json(prefix)}, {_json(origin)}, base_url)' if _embeds_origin(prefix,origin) else _json(prefix)
                 lines.append(f'    _state = base64.b64encode(f"time:{{int(time.time()*1000)}}{suffix}".encode()).decode()')
-                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {_json(prefix)} + "state=" + quote(_state, safe=""))')
+                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {prefix_expr} + "state=" + quote(_state, safe=""))')
             else:
                 rel=_relative_url(step.get('url'))
-                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {_json(rel)})')
+                origin=_origin(step.get('url'))
+                rel_expr=f'_rebase({_json(rel)}, {_json(origin)}, base_url)' if _embeds_origin(rel,origin) else _json(rel)
+                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {rel_expr})')
             lines.append('    page.wait_for_load_state("domcontentloaded")')
         elif action in {'click','fill','select','check','uncheck','uploadFile','keyboard','assert','extractValue'}:
             key=step.get('element')
@@ -457,7 +472,10 @@ def _java_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     for step in _ordered_steps(ir):
         sid=str(step['id']); action=step['action']; source_map[sid]={'file':'src/test/java/generated/tests/'+test_cls+'.java','line':len(lines)+1}
         lines.append(f'    // IR-STEP: {sid}')
-        if action=='navigate': lines.append(f'    driver.get(Config.resolveUrl("{_java(_relative_url(step.get("url")))}"));')
+        if action=='navigate':
+            rel=_relative_url(step.get("url")); origin=_origin(step.get("url"))
+            rel_expr=f'Config.rebase("{_java(rel)}", "{_java(origin)}")' if _embeds_origin(rel,origin) else f'"{_java(rel)}"'
+            lines.append(f'    driver.get(Config.resolveUrl({rel_expr}));')
         elif action in {'click','fill','select','check','uncheck','uploadFile','keyboard','assert','extractValue'}:
             key=step.get('element'); elem=f'screen.{elem_methods[key]}()' if key and key in elem_methods else None
             if action=='click':
@@ -503,7 +521,7 @@ def _java_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         elif action=='checkpoint': lines.append(f'    // Checkpoint: {_java(step.get("description", ""))}')
         elif action=='wait': lines.append('    // Condition-based waits are handled by Page Object visibility waits.')
     lines += ['  }','}']; files['src/test/java/generated/tests/'+test_cls+'.java']='\n'.join(lines)+'\n'
-    files['src/test/java/generated/support/Config.java']='''package generated.support;\n\npublic final class Config {\n  private Config() {}\n  public static String value(String name, String fallback) { String v=System.getenv(name); return v==null||v.isBlank()?fallback:v; }\n  public static String required(String name) { String v=System.getenv(name); if(v==null||v.isBlank()) throw new IllegalStateException(name+" is required"); return v; }\n  public static String resolveUrl(String relative) { String base=required("BASE_URL").replaceAll("/+$",""); return relative.startsWith("/")?base+relative:base+"/"+relative; }\n}\n'''
+    files['src/test/java/generated/support/Config.java']='''package generated.support;\n\npublic final class Config {\n  private Config() {}\n  public static String value(String name, String fallback) { String v=System.getenv(name); return v==null||v.isBlank()?fallback:v; }\n  public static String required(String name) { String v=System.getenv(name); if(v==null||v.isBlank()) throw new IllegalStateException(name+" is required"); return v; }\n  public static String rebase(String text, String recordedOrigin) { String target=required("BASE_URL").replaceAll("/+$",""); return text.replace(java.net.URLEncoder.encode(recordedOrigin, java.nio.charset.StandardCharsets.UTF_8), java.net.URLEncoder.encode(target, java.nio.charset.StandardCharsets.UTF_8)).replace(recordedOrigin, target); }\n  public static String resolveUrl(String relative) { String base=required("BASE_URL").replaceAll("/+$",""); return relative.startsWith("/")?base+relative:base+"/"+relative; }\n}\n'''
     files['pom.xml']='''<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">\n  <modelVersion>4.0.0</modelVersion><groupId>generated</groupId><artifactId>automation-tests</artifactId><version>1.0.0</version>\n  <properties><maven.compiler.release>21</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>\n  <dependencies><dependency><groupId>org.seleniumhq.selenium</groupId><artifactId>selenium-java</artifactId><version>4.35.0</version></dependency><dependency><groupId>org.testng</groupId><artifactId>testng</artifactId><version>7.11.0</version><scope>test</scope></dependency></dependencies>\n  <build><plugins><plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-surefire-plugin</artifactId><version>3.5.3</version><configuration><suiteXmlFiles><suiteXmlFile>testng.xml</suiteXmlFile></suiteXmlFiles></configuration></plugin></plugins></build>\n</project>\n'''
     files['testng.xml']=f'''<!DOCTYPE suite SYSTEM "https://testng.org/testng-1.0.dtd">\n<suite name="Generated Automation"><test name="{scenario_name}"><classes><class name="generated.tests.{test_cls}"/></classes></test></suite>\n'''
     secret_refs=sorted({str((s.get('value') or {}).get('reference')) for s in ir['steps'] if (s.get('value') or {}).get('source')=='secret' and (s.get('value') or {}).get('reference')})

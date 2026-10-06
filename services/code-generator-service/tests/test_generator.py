@@ -80,3 +80,34 @@ def test_real_button_with_loading_class_is_not_skipped():
     from app.generator.core import _is_transient_overlay
     assert not _is_transient_overlay({"preferred":{"strategy":"css","value":"button.btn.loading"}})
     assert _is_transient_overlay({"preferred":{"strategy":"css","value":"div.modal-backdrop"}})
+
+
+def test_login_redirect_uri_is_rebased_to_run_environment_and_progress_printed():
+    import copy
+    ir=copy.deepcopy(IR)
+    import base64
+    state=base64.b64encode(b"time:1791267747833|url:null").decode()
+    ir["steps"][0]["url"]=("https://env27.erp.bracits.net/idp/realms/brac/protocol/openid-connect/auth"
+        "?client_id=erp&redirect_uri=https%3A%2F%2Fenv27.erp.bracits.net&state="+state+"&response_type=code")
+    r=req("PLAYWRIGHT_PYTEST"); r["automationIr"]=ir
+    out=generate_project(r)
+    test=next(x['content'] for x in out['files'] if x['path'].startswith('tests/test_'))
+    assert '_rebase(' in test and 'def _rebase' in test
+    assert '[IR-STEP] step-001 navigate (1/4)' in test
+    ns={}
+    import re
+    src=test[test.index('def _rebase'):test.index('def test_')]
+    exec('from urllib.parse import quote_plus\n'+src, ns)
+    prefix=re.search(r'_rebase\((".*?"), ("[^"]*"), base_url\)', test)
+    recorded=eval(prefix.group(2)); text=eval(prefix.group(1))
+    rebased=ns['_rebase'](text, recorded, "https://erpstaging.brac.net/")
+    assert 'env27' not in rebased and 'erpstaging.brac.net' in rebased
+
+def test_java_navigate_rebases_origin():
+    import copy
+    ir=copy.deepcopy(IR)
+    ir["steps"][0]["url"]="https://env27.erp.bracits.net/auth?redirect_uri=https%3A%2F%2Fenv27.erp.bracits.net"
+    r=req("SELENIUM_TESTNG"); r["automationIr"]=ir
+    out=generate_project(r)
+    src='\n'.join(x['content'] for x in out['files'] if x['path'].endswith('.java'))
+    assert 'Config.rebase(' in src

@@ -4,6 +4,7 @@ import com.brac.automation.platform.application.ApplicationService;
 import com.brac.automation.platform.audit.AuditService;
 import com.brac.automation.platform.codegen.CodeGeneratorDtos;
 import com.brac.automation.platform.codegen.CodeGeneratorService;
+import com.brac.automation.platform.environment.EnvironmentService;
 import com.brac.automation.platform.common.ResourceNotFoundException;
 import com.brac.automation.platform.recorder.RecordingSessionEntity;
 import com.brac.automation.platform.recorder.RecordingSessionRepository;
@@ -39,12 +40,15 @@ public class ScenarioActionsService {
     private final RunnerClient runner;
     private final AuditService audit;
     private final ObjectMapper mapper;
+    private final EnvironmentService environments;
 
     public ScenarioActionsService(TestScenarioRepository scenarios, ScenarioVersionRepository versions,
             RecordingSessionRepository sessions, ApplicationService applications, WorkspaceAccessGuard guard,
-            CodeGeneratorService codeGenerator, RunnerClient runner, AuditService audit, ObjectMapper mapper) {
+            CodeGeneratorService codeGenerator, RunnerClient runner, AuditService audit, ObjectMapper mapper,
+            EnvironmentService environments) {
         this.scenarios = scenarios; this.versions = versions; this.sessions = sessions; this.applications = applications;
         this.guard = guard; this.codeGenerator = codeGenerator; this.runner = runner; this.audit = audit; this.mapper = mapper;
+        this.environments = environments;
     }
 
     public byte[] bulkExport(UUID workspaceId, UUID applicationId, ScenarioActionsDtos.BulkExportRequest request) {
@@ -165,6 +169,8 @@ public class ScenarioActionsService {
         // Scenarios always execute in the persisted execution order (not click order), so suites that depend on sequence are deterministic.
         List<UUID> ids = inExecutionOrder(workspaceId, applicationId, distinct(request.scenarioIds()));
         boolean stopOnFailure = Boolean.TRUE.equals(request.stopOnFailure());
+        String envBaseUrl = request.environmentId() == null ? null
+            : environments.requireExecutable(workspaceId, applicationId, request.environmentId()).getBaseUrl();
         List<ScenarioActionsDtos.RunResult> results = new ArrayList<>();
         String stoppedBy = null;
         for (UUID scenarioId : ids) {
@@ -178,7 +184,7 @@ public class ScenarioActionsService {
             try {
                 CodeGeneratorDtos.ImplementationDetail detail = codeGenerator.generate(
                     workspaceId, applicationId, scenarioId, new CodeGeneratorDtos.GenerateRequest(RUN_TARGET));
-                String baseUrl = baseUrl(workspaceId, applicationId, scenarioId);
+                String baseUrl = envBaseUrl != null ? envBaseUrl : baseUrl(workspaceId, applicationId, scenarioId);
                 result = runner.run(scenarioId, scenario.getName(), baseUrl, detail.files());
             } catch (Exception ex) {
                 result = new ScenarioActionsDtos.RunResult(scenarioId, scenario.getName(), "ERROR", null, 0, "", ex.getMessage());
@@ -194,7 +200,7 @@ public class ScenarioActionsService {
         return new ScenarioActionsDtos.BulkRunResponse(results.size(), passed, failed, skipped, results);
     }
 
-    private List<UUID> inExecutionOrder(UUID workspaceId, UUID applicationId, List<UUID> requested) {
+    List<UUID> inExecutionOrder(UUID workspaceId, UUID applicationId, List<UUID> requested) {
         if (requested.size() < 2) return requested;
         List<UUID> ordered = new ArrayList<>();
         scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId)
@@ -203,7 +209,7 @@ public class ScenarioActionsService {
         return ordered;
     }
 
-    private String baseUrl(UUID workspaceId, UUID applicationId, UUID scenarioId) {
+    String baseUrl(UUID workspaceId, UUID applicationId, UUID scenarioId) {
         ScenarioVersionEntity version = versions.findFirstByScenarioIdOrderByVersionNoDesc(scenarioId)
             .orElseThrow(() -> new ResourceNotFoundException("Scenario version not found."));
         UUID sourceId = version.getSourceRecordingSessionId();
@@ -220,12 +226,12 @@ public class ScenarioActionsService {
         throw new IllegalStateException("Could not determine a target Base URL for this scenario.");
     }
 
-    private TestScenarioEntity scenario(UUID workspaceId, UUID applicationId, UUID scenarioId) {
+    TestScenarioEntity scenario(UUID workspaceId, UUID applicationId, UUID scenarioId) {
         return scenarios.findByIdAndWorkspaceIdAndApplicationId(scenarioId, workspaceId, applicationId)
             .orElseThrow(() -> new ResourceNotFoundException("Scenario not found."));
     }
 
-    private List<UUID> distinct(List<UUID> ids) { return new ArrayList<>(new LinkedHashSet<>(ids)); }
+    List<UUID> distinct(List<UUID> ids) { return new ArrayList<>(new LinkedHashSet<>(ids)); }
 
     private String safePath(String value) {
         String path = value.replace('\\', '/');

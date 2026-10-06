@@ -57,6 +57,14 @@ public final class RecorderDtos {
         Instant createdAt
     ) {}
 
+    public record CloneScenarioRequest(
+        @jakarta.validation.constraints.NotBlank @Size(max=200) String name,
+        @Size(max=120) String moduleName,
+        @Size(max=120) String featureName,
+        java.util.Map<String,String> parameters,
+        java.util.Map<String,String> secretReferences
+    ) {}
+
     public record ReorderRequest(@jakarta.validation.constraints.NotEmpty @Size(max=500) java.util.List<UUID> scenarioIds) {}
 
     public record ScenarioDetailResponse(ScenarioResponse scenario, int versionNo, UUID sourceRecordingSessionId, JsonNode automationIr, Instant versionCreatedAt) {}

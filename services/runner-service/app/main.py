@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import collections
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="Autonomous QA Execution Agent Local Runner", version="0.3.2")
+app = FastAPI(title="Autonomous QA Execution Agent Local Runner", version="0.4.0")
 
 
 class GeneratedFile(BaseModel):
@@ -107,7 +111,7 @@ def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, s
 
 @app.get("/health")
 def health():
-    return {"status": "UP", "service": "runner", "version": "0.3.2"}
+    return {"status": "UP", "service": "runner", "version": "0.4.0"}
 
 
 @app.post("/api/v1/run", response_model=RunResponse)
@@ -185,3 +189,148 @@ def run(request: RunRequest):
             stderr=str(ex),
         )
 
+
+
+# ---------------------------------------------------------------------------
+# Asynchronous runs with live output (used by the Control Plane run jobs)
+# ---------------------------------------------------------------------------
+STEP_RE = re.compile(r"\[IR-STEP\]\s+(\S+)\s+(\S+)\s+\((\d+)/(\d+)\)")
+MAX_RUNS_KEPT = 100
+MAX_OUTPUT_CHARS = 64000
+_runs: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
+_runs_lock = threading.Lock()
+_slots = threading.Semaphore(2)
+
+
+class RunHandle(BaseModel):
+    runId: str
+
+
+class RunStatus(BaseModel):
+    runId: str
+    status: Literal["QUEUED", "RUNNING", "PASSED", "FAILED", "TIMED_OUT", "ERROR"]
+    exitCode: int | None = None
+    durationMs: int = 0
+    output: str = ""
+    currentStep: int = 0
+    totalSteps: int = 0
+    currentStepId: str = ""
+    currentAction: str = ""
+    message: str = ""
+
+
+def _snapshot(rec: dict) -> RunStatus:
+    with _runs_lock:
+        started = rec["started"]
+        end = rec["ended"] or time.monotonic()
+        return RunStatus(
+            runId=rec["runId"], status=rec["status"], exitCode=rec["exitCode"],
+            durationMs=int((end - started) * 1000) if started else 0,
+            output=clipped("".join(rec["output"]), 16000),
+            currentStep=rec["currentStep"], totalSteps=rec["totalSteps"],
+            currentStepId=rec["currentStepId"], currentAction=rec["currentAction"],
+            message=rec["message"],
+        )
+
+
+def _append(rec: dict, text: str) -> None:
+    with _runs_lock:
+        rec["output"].append(text)
+        rec["size"] += len(text)
+        while rec["size"] > MAX_OUTPUT_CHARS and len(rec["output"]) > 1:
+            rec["size"] -= len(rec["output"].pop(0))
+
+
+def _finish(rec: dict, status: str, exit_code: int | None = None, message: str = "") -> None:
+    with _runs_lock:
+        rec["status"] = status
+        rec["exitCode"] = exit_code
+        rec["message"] = message
+        rec["ended"] = time.monotonic()
+
+
+def _execute_async(rec: dict, request: RunRequest) -> None:
+    with _slots:
+        rec["started"] = time.monotonic()
+        with _runs_lock:
+            rec["status"] = "RUNNING"
+        try:
+            with tempfile.TemporaryDirectory(prefix="automation-run-") as tmp:
+                root = Path(tmp)
+                for item in request.files:
+                    target = root / safe_relative_path(item.path)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(item.content, encoding="utf-8")
+                if not (root / "pytest.ini").exists() and not (root / "tests").exists():
+                    _finish(rec, "ERROR", None, "Local runner currently supports Playwright + Pytest implementations only.")
+                    return
+                required = required_runtime_variables(root)
+                env = build_child_env(request.baseUrl, required, ir_parameter_defaults(root))
+                missing = [key for key in required if not env.get(key)]
+                if missing:
+                    msg = ("Missing runtime environment variable(s): " + ", ".join(missing)
+                           + ". Configure them in the runner runtime environment (for local Docker, use .env.runtime) and restart the runner.")
+                    _append(rec, msg + "\n")
+                    _finish(rec, "ERROR", None, msg)
+                    return
+                _append(rec, f"[runner] BASE_URL={request.baseUrl}\n")
+                proc = subprocess.Popen(
+                    [sys.executable, "-u", "-m", "pytest", "-q", "-s", "--tb=short", "-p", "no:cacheprovider"],
+                    cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                )
+                timed_out = threading.Event()
+
+                def kill_on_timeout() -> None:
+                    timed_out.set()
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+
+                timer = threading.Timer(request.timeoutSeconds, kill_on_timeout)
+                timer.start()
+                try:
+                    assert proc.stdout is not None
+                    for line in proc.stdout:
+                        _append(rec, line)
+                        m = STEP_RE.search(line)
+                        if m:
+                            with _runs_lock:
+                                rec["currentStepId"], rec["currentAction"] = m.group(1), m.group(2)
+                                rec["currentStep"], rec["totalSteps"] = int(m.group(3)), int(m.group(4))
+                    code = proc.wait()
+                finally:
+                    timer.cancel()
+                if timed_out.is_set():
+                    _finish(rec, "TIMED_OUT", None, f"Timed out after {request.timeoutSeconds}s")
+                else:
+                    _finish(rec, "PASSED" if code == 0 else "FAILED", code)
+        except HTTPException as ex:
+            _finish(rec, "ERROR", None, str(ex.detail))
+        except Exception as ex:  # noqa: BLE001
+            _append(rec, f"[runner] {ex}\n")
+            _finish(rec, "ERROR", None, str(ex))
+
+
+@app.post("/api/v1/runs", response_model=RunHandle)
+def start_run(request: RunRequest):
+    if not request.files:
+        raise HTTPException(status_code=422, detail="Generated project contains no files.")
+    run_id = uuid.uuid4().hex
+    rec = {"runId": run_id, "status": "QUEUED", "exitCode": None, "started": None, "ended": None, "output": [], "size": 0,
+           "currentStep": 0, "totalSteps": 0, "currentStepId": "", "currentAction": "", "message": ""}
+    with _runs_lock:
+        _runs[run_id] = rec
+        while len(_runs) > MAX_RUNS_KEPT:
+            _runs.popitem(last=False)
+    threading.Thread(target=_execute_async, args=(rec, request), daemon=True, name=f"run-{run_id[:8]}").start()
+    return RunHandle(runId=run_id)
+
+
+@app.get("/api/v1/runs/{run_id}", response_model=RunStatus)
+def get_run(run_id: str):
+    with _runs_lock:
+        rec = _runs.get(run_id)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="Run not found.")
+    return _snapshot(rec)
