@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import subprocess
@@ -87,6 +87,24 @@ def ir_parameter_defaults(root: Path) -> dict[str, str]:
         return {}
 
 
+# Only these host variables are visible to generated test code. Everything else in the
+# runner container environment (including unrelated secrets) is withheld.
+SAFE_HOST_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR",
+                 "PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD")
+
+
+def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, str]) -> dict[str, str]:
+    env = {k: os.environ[k] for k in SAFE_HOST_ENV if k in os.environ}
+    env.update({"BASE_URL": base_url, "BROWSER": "chromium", "HEADLESS": "true", "PYTHONUNBUFFERED": "1"})
+    # Secrets: only the variables the generated project declares in its .env.example.
+    for key in required:
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    for key, value in ir_defaults.items():
+        env.setdefault(key, value)
+    return env
+
+
 @app.get("/health")
 def health():
     return {"status": "UP", "service": "runner", "version": "0.3.2"}
@@ -109,13 +127,9 @@ def run(request: RunRequest):
             if not (root / "pytest.ini").exists() and not (root / "tests").exists():
                 raise HTTPException(status_code=422, detail="Local runner currently supports Playwright + Pytest implementations only.")
 
-            env = os.environ.copy()
-            env["BASE_URL"] = request.baseUrl
-            env["BROWSER"] = "chromium"
-            env["HEADLESS"] = "true"
-            env["PYTHONUNBUFFERED"] = "1"
-            for key, value in ir_parameter_defaults(root).items():
-                env.setdefault(key, value)
+            runtime_defaults = ir_parameter_defaults(root)
+            required = required_runtime_variables(root)
+            env = build_child_env(request.baseUrl, required, runtime_defaults)
 
             missing = [key for key in required_runtime_variables(root) if not env.get(key)]
             if missing:

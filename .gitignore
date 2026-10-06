@@ -10,3 +10,14 @@ __pycache__/
 .vscode/
 .DS_Store
 runtime-artifacts/
+*.bak
+*.bak-*
+*.log
+*.pyc
+.pytest_cache/
+.env.*
+!.env.example
+!.env.runtime.example
+
+_backup/
+*.tsbuildinfo

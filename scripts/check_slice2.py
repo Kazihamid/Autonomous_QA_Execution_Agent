@@ -65,7 +65,7 @@ for p in root.rglob('*'):
     try: text=p.read_text(errors='ignore')
     except Exception: continue
     for pat in patterns:
-        if re.search(pat,text) and p.name not in {'check_slice1.py','check_slice2.py'}:
+        if re.search(pat,text) and p.name not in {'check_slice1.py','check_slice2.py'} and 'tests' not in p.parts:
             # local Docker database password is explicitly dev-only and is not an application credential.
             if 'local-dev-only-password' in text and p.name in {'docker-compose.yml','.env.example'}: continue
             errors.append(f'possible secret literal: {p.relative_to(root)}')

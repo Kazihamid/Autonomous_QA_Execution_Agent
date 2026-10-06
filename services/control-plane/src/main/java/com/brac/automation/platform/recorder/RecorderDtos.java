@@ -53,8 +53,11 @@ public final class RecorderDtos {
         String name,
         String status,
         int currentVersion,
+        Integer executionOrder,
         Instant createdAt
     ) {}
+
+    public record ReorderRequest(@jakarta.validation.constraints.NotEmpty @Size(max=500) java.util.List<UUID> scenarioIds) {}
 
     public record ScenarioDetailResponse(ScenarioResponse scenario, int versionNo, UUID sourceRecordingSessionId, JsonNode automationIr, Instant versionCreatedAt) {}
 }

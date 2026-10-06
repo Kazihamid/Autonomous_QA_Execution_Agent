@@ -1,4 +1,4 @@
-﻿# Autonomous QA Execution Agent Starter v0.2.0
+# Autonomous QA Execution Agent Starter v0.3.2
 
 Docker-first runtime for the AI-Powered No-Code / Low-Code Intelligent Test Automation Platform.
 
@@ -63,12 +63,15 @@ Use `START_PROJECT.bat`. See `START_HERE.md` for the exact flow.
 
 The artifact-generation environment did not run Docker Engine, so the complete containerized stack must still be executed on the developer workstation. Docker build/runtime issues, if any, should be diagnosed from the workstation logs rather than assumed successful.
 
-## Next phase
+## Status
 
-**Vertical Slice 3 â€” Code Generation**
+Vertical Slice 3 (code generation for Python + Playwright + Pytest and Java + Selenium + TestNG) and the
+local Pytest runner are implemented. Next: isolated/sandboxed execution, async run jobs and run artifacts.
 
-The same saved Automation IR will generate equivalent runnable projects for:
+## Security notes
 
-- Python + Playwright + Pytest
-- Java + Selenium + TestNG
-
+- The `dev` Spring profile (header-based identity) refuses to start unless `PLATFORM_ENV=local`.
+- All published ports bind to `127.0.0.1`.
+- The runner passes only a minimal environment plus the secrets a generated project declares in its
+  `.env.example` to test code. Copy `.env.runtime.example` to `.env.runtime` for local secrets; never commit it.
+- Set `POSTGRES_PASSWORD` in your environment to override the local default.

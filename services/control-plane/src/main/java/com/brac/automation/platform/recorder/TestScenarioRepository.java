@@ -6,7 +6,7 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface TestScenarioRepository extends JpaRepository<TestScenarioEntity, UUID> {
-    List<TestScenarioEntity> findByWorkspaceIdAndApplicationIdOrderByModuleNameAscFeatureNameAscNameAsc(UUID workspaceId, UUID applicationId);
+    List<TestScenarioEntity> findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(UUID workspaceId, UUID applicationId);
     Optional<TestScenarioEntity> findByIdAndWorkspaceIdAndApplicationId(UUID id, UUID workspaceId, UUID applicationId);
     long countByApplicationId(UUID applicationId);
 }

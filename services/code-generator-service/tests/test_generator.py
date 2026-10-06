@@ -59,3 +59,24 @@ def test_legacy_element_with_null_preferred_uses_meaningful_description_fallback
     out=generate_project(request)
     source='\n'.join(x['content'] for x in out['files'])
     assert 'get_by_text("EDMS Dashboard", exact=True)' in source
+
+
+def _ir_with_overlay():
+    import copy
+    ir=copy.deepcopy(IR)
+    ir["elements"]["overlay"]={"preferred":{"strategy":"id","value":"overlay"},"alternatives":[]}
+    ir["steps"].append({"id":"step-005","action":"click","element":"overlay"})
+    return ir
+
+def test_transient_overlay_click_is_skipped_in_both_targets():
+    for target in ("PLAYWRIGHT_PYTEST","SELENIUM_TESTNG"):
+        r=req(target); r["automationIr"]=_ir_with_overlay()
+        out=generate_project(r)
+        source='\n'.join(x['content'] for x in out['files'] if x['path'].endswith(('.py','.java')))
+        assert 'overlay' not in source.replace('# Skipped recorder container click for overlay','').replace('// Skipped recorder container click for overlay','').lower()
+        assert 'Skipped recorder container click for overlay' in source
+
+def test_real_button_with_loading_class_is_not_skipped():
+    from app.generator.core import _is_transient_overlay
+    assert not _is_transient_overlay({"preferred":{"strategy":"css","value":"button.btn.loading"}})
+    assert _is_transient_overlay({"preferred":{"strategy":"css","value":"div.modal-backdrop"}})
