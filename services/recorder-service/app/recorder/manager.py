@@ -191,9 +191,46 @@ class RecorderManager:
 
     async def cancel(self, sid: str) -> RecordingSession:
         rt = self._get(sid)
+        if rt.model.status in {SessionStatus.RECORDING, SessionStatus.PAUSED}:
+            # Cancelling a take in progress discards what was captured and returns to READY so the user can press
+            # "Start Recording" again. The managed browser stays open and is sent back to the start page.
+            await self._reset_take(rt)
+            return rt.model
         rt.model.status = SessionStatus.CANCELLED
         await self._cleanup(rt)
         return rt.model
+
+    async def _reset_take(self, rt: RuntimeSession):
+        rt.model.status = SessionStatus.READY
+        rt.events.clear()
+        rt.frames.clear()
+        rt.sequence = 0
+        rt.ir = None
+        rt.model.error = None
+        if not rt.context:
+            return
+        try:
+            await rt.context.clear_cookies()
+            pages = list(rt.context.pages)
+            for extra in pages[1:]:
+                try:
+                    await extra.close()
+                except Exception:
+                    pass
+            page = rt.context.pages[0] if rt.context.pages else await rt.context.new_page()
+            await self._register_page(rt.model.sessionId, page)
+            await page.goto(rt.model.startUrl, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            # The take is already discarded; a failed reload must not leave the session unusable.
+            pass
+
+    async def paste_text(self, sid: str, text: str) -> None:
+        """Inserts text into the focused element of the managed browser, like a paste (fires input events)."""
+        rt = self._get(sid)
+        if rt.model.status in TERMINAL or not rt.context:
+            raise ValueError("Session is not active")
+        page = self.active_page(sid)
+        await page.keyboard.insert_text(text)
 
     async def _cleanup(self, rt: RuntimeSession):
         try:

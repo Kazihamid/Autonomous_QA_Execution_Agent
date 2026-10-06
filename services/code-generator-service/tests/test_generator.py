@@ -111,3 +111,11 @@ def test_java_navigate_rebases_origin():
     out=generate_project(r)
     src='\n'.join(x['content'] for x in out['files'] if x['path'].endswith('.java'))
     assert 'Config.rebase(' in src
+
+
+def test_python_conftest_reports_failure_diagnostics():
+    import ast
+    out = generate_project(req("PLAYWRIGHT_PYTEST"))
+    conf = next(x['content'] for x in out['files'] if x['path'] == 'tests/conftest.py')
+    ast.parse(conf)
+    assert "pytest_runtest_makereport" in conf and "[IR-FAIL]" in conf and "select elements on page" in conf

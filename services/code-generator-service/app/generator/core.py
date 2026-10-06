@@ -426,7 +426,71 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         elif action=='checkpoint': lines.append(f'    # Checkpoint: {str(step.get("description", "")).replace(chr(10)," ")}')
         elif action=='wait': lines.append('    page.wait_for_load_state("domcontentloaded")')
     files[f'tests/test_{module}.py']='\n'.join(lines)+'\n'; files['tests/__init__.py']=''
-    files['tests/conftest.py']='''import os\nimport pytest\nfrom playwright.sync_api import sync_playwright\n\n@pytest.fixture(scope="session")\ndef base_url():\n    return os.environ.get("BASE_URL", "http://localhost")\n\n@pytest.fixture\ndef page():\n    browser_name=os.environ.get("BROWSER", "chromium").lower()\n    headless=os.environ.get("HEADLESS", "true").lower() != "false"\n    with sync_playwright() as p:\n        browser_type=getattr(p, browser_name if browser_name in {"chromium","firefox","webkit"} else "chromium")\n        browser=browser_type.launch(headless=headless)\n        context=browser.new_context()\n        pg=context.new_page()\n        yield pg\n        context.close(); browser.close()\n'''
+    files['tests/conftest.py']='''import os
+import pytest
+from playwright.sync_api import sync_playwright
+
+
+@pytest.fixture(scope="session")
+def base_url():
+    return os.environ.get("BASE_URL", "http://localhost")
+
+
+@pytest.fixture
+def page():
+    browser_name = os.environ.get("BROWSER", "chromium").lower()
+    headless = os.environ.get("HEADLESS", "true").lower() != "false"
+    with sync_playwright() as p:
+        browser_type = getattr(p, browser_name if browser_name in {"chromium", "firefox", "webkit"} else "chromium")
+        browser = browser_type.launch(headless=headless)
+        context = browser.new_context()
+        pg = context.new_page()
+        yield pg
+        context.close()
+        browser.close()
+
+
+def _diagnose(pg):
+    """Prints where the browser was when a step failed, so a missing element can be explained from the run output alone."""
+    def say(msg):
+        print("[IR-FAIL] " + msg, flush=True)
+    try:
+        pages = pg.context.pages
+        say(f"open tabs: {len(pages)}")
+        for i, p in enumerate(pages):
+            say(f"  tab {i + 1}: {p.url}")
+    except Exception:
+        pass
+    try:
+        say(f"current url: {pg.url}")
+        say(f"title: {pg.title()}")
+    except Exception:
+        pass
+    try:
+        say("frames: " + ", ".join(f.url for f in pg.frames if f.url)[:600])
+    except Exception:
+        pass
+    try:
+        ids = pg.eval_on_selector_all("select", "els => els.map(e => e.id || e.name || '(no id)')")
+        say("select elements on page: " + (", ".join(ids) if ids else "none"))
+    except Exception:
+        pass
+    try:
+        text = " ".join(pg.inner_text("body", timeout=3000).split())
+        say("visible text: " + text[:500])
+    except Exception:
+        pass
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    report = outcome.get_result()
+    if report.when == "call" and report.failed:
+        pg = item.funcargs.get("page")
+        if pg is not None:
+            _diagnose(pg)
+'''
     files['requirements.txt']='pytest==8.4.2\nplaywright==1.55.0\n'
     files['pytest.ini']='[pytest]\ntestpaths = tests\naddopts = -q\n'
     secret_refs=sorted({str((s.get('value') or {}).get('reference')) for s in ir['steps'] if (s.get('value') or {}).get('source')=='secret' and (s.get('value') or {}).get('reference')})

@@ -116,3 +116,24 @@ button.danger:hover,.button.danger:hover { background:#8f1c14; }
 .badge.bad { background:#feeceb; color:var(--danger); }
 .form-table input { width:100%; }
 .field-hint { font-size:12px; color:var(--muted); margin-top:4px; }
+
+/* Scenario repository toolbar: grouped controls with aligned baselines */
+.toolbar-row { display:flex; flex-wrap:wrap; gap:12px; align-items:stretch; }
+.toolbar-group { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; padding:10px 12px; border-radius:10px; }
+.toolbar-group.run { background:#eef5fc; border:1px solid #d5e5f5; }
+.toolbar-group.export { background:#eaf6ef; border:1px solid #cfe8d9; margin-left:auto; }
+.toolbar-label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; margin:0; }
+.toolbar-label select { height:40px; }
+.toolbar-check { display:inline-flex; gap:6px; align-items:center; margin:0; height:40px; }
+.toolbar-group > button, .toolbar-group > .badge { height:40px; }
+.toolbar-group .badge { display:inline-flex; align-items:center; }
+.export-btn { background:#137333; }
+.export-btn:hover { background:#0f5c29; }
+.export-btn:disabled { background:#137333; }
+
+/* Record Test: paste helper above the managed browser */
+.paste-bar { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; margin:10px 0; padding:10px 12px; border-radius:10px; background:#eef5fc; border:1px solid #d5e5f5; }
+.paste-label { display:flex; flex-direction:column; gap:4px; font-size:12px; font-weight:600; flex:1 1 320px; margin:0; }
+.paste-mask { display:inline-flex; gap:6px; align-items:center; height:40px; font-size:13px; margin:0; }
+.paste-bar > button { height:40px; }
+.paste-hint { flex-basis:100%; margin:0; }

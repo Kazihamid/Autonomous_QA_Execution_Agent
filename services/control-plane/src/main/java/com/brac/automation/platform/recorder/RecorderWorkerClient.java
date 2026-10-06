@@ -76,6 +76,15 @@ public class RecorderWorkerClient {
         }
     }
 
+    public void pasteText(String workerSessionId, String text) {
+        try {
+            postJsonNoResponse("/api/v1/sessions/" + workerSessionId + "/paste", new PasteRequest(text));
+        } catch (RecorderWorkerException ex) {
+            // Never echo the text: it may be a password.
+            throw new RecorderWorkerException("Text could not be pasted into the managed browser. Click the field in the browser first. " + ex.getMessage().replace(text, "***"), ex);
+        }
+    }
+
     public FinishResponse finish(String workerSessionId) {
         try {
             return postEmpty(
@@ -195,6 +204,7 @@ public class RecorderWorkerClient {
     public record CreateRequest(String startUrl, String browser, boolean headless, String scenarioName) {}
     public record AssertionRequest(String selector, String assertionType, String expected) {}
     public record CheckpointRequest(String description) {}
+    public record PasteRequest(String text) {}
     public record WorkerSession(String sessionId, String startUrl, String scenarioName, String browser, boolean headless, String status, String createdAt, String error) {}
     public record FinishResponse(WorkerSession session, int rawEventCount, int semanticActionCount, List<String> errors, JsonNode ir) {}
 }
