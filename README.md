@@ -1,77 +1,119 @@
-# Autonomous QA Execution Agent Starter v0.3.2
+# Autonomous QA Execution Agent
 
-Docker-first runtime for the AI-Powered No-Code / Low-Code Intelligent Test Automation Platform.
+Docker-first, AI-assisted QA automation platform for recording browser workflows, generating reusable Automation IR, producing runnable test code, and executing scenarios from a central repository.
 
-## Implemented vertical slices
+## Core capabilities
 
-### Vertical Slice 1
+- Workspace, application, and environment management
+- Managed Chromium recording with noVNC
+- Sensitive-input redaction and secret references
+- Canonical Automation IR
+- Scenario Repository
+- Python + Playwright + Pytest generation
+- Java + Selenium + TestNG generation
+- Local execution through the Runner service
+- Single and bulk scenario execution
+- Combined multi-scenario project export
 
-`Identity â†’ Workspace â†’ Application â†’ Environment â†’ Target Validation`
-
-### Vertical Slice 2
-
-`Environment â†’ Recorder Session â†’ Managed Chromium â†’ Capture â†’ Normalize â†’ Automation IR â†’ Scenario Repository`
-
-## Main components
+## Architecture
 
 - **Web:** Next.js / React / TypeScript
-- **Control Plane:** Java 25 / Spring Boot 4 / JPA / Flyway
-- **Database:** PostgreSQL 18
-- **Recorder Worker:** Python / FastAPI / Playwright
-- **Managed browser display:** Xvfb + x11vnc + noVNC
-- **Canonical source of truth:** framework-neutral Automation IR
+- **Control Plane:** Java / Spring Boot / JPA / Flyway
+- **Database:** PostgreSQL
+- **Recorder:** Python / FastAPI / Chromium / Xvfb / noVNC
+- **Code Generator:** Python / FastAPI
+- **Runner:** Python / Playwright / Pytest
+- **Runtime:** Docker Compose
 
-## Recorder lifecycle
+## Requirements
 
-The MVP implements the key lifecycle states:
+For the Docker-first workflow, install only:
 
-`PROVISIONING â†’ STARTING_BROWSER â†’ READY â†’ RECORDING â†” PAUSED â†’ FINISHING â†’ NORMALIZING â†’ BUILDING_IR â†’ VALIDATING â†’ COMPLETED`
+1. Git
+2. Docker Desktop
+3. WSL 2 / virtualization required by Docker Desktop
+4. Internet access for the first image/dependency download
 
-It also supports `FAILED` and `CANCELLED`.
+You do **not** need separate host installations of Java, Maven, Node.js, PostgreSQL, Python, Playwright, or Chromium.
 
-## Scenario repository hierarchy
+## Fresh clone
 
-The UI represents:
+```powershell
+git clone https://github.com/Kazihamid/Autonomous_QA_Execution_Agent.git
+cd Autonomous_QA_Execution_Agent
+.\START_PROJECT.bat
+```
 
-`Application â†’ Module â†’ Feature â†’ Scenario â†’ Version â†’ Automation IR`
+On first start, the startup script creates `.env.runtime` from `.env.runtime.example` when needed.
 
-Version 1 is created from a completed recorder session.
+For scenarios that require secrets, edit `.env.runtime` locally:
 
-## Security controls retained from the design
+```env
+SECRET_PASSWORD=
+```
 
-- server-side Workspace authorization;
-- SSRF/target URL policy validation;
-- target revalidation before recording;
-- sensitive input redaction at browser instrumentation time;
-- secret-reference generation instead of plaintext password persistence;
-- local Recorder/noVNC ports bound to loopback only;
-- audit records for high-value Recorder operations.
+Never commit real credentials.
 
-## Quick start
+Then open:
 
-Use `START_PROJECT.bat`. See `START_HERE.md` for the exact flow.
+```text
+http://localhost:3000
+```
 
-## Validation completed when packaging
+## Useful commands
 
-- Python source compilation: PASS
-- Recorder normalizer / locator / IR unit tests: **5/5 PASS**
-- Java source syntax parse: PASS
-- TypeScript/TSX syntax parse: PASS
-- Docker Compose YAML parse: PASS
-- OpenAPI YAML parse: PASS
-- Vertical Slice 2 structural/security validation: PASS
+```powershell
+docker compose up -d --build
+docker compose ps
+docker compose logs -f
+docker compose down
+```
 
-The artifact-generation environment did not run Docker Engine, so the complete containerized stack must still be executed on the developer workstation. Docker build/runtime issues, if any, should be diagnosed from the workstation logs rather than assumed successful.
+Stopping the project with `docker compose down` preserves PostgreSQL data.
 
 ## Status
 
 Vertical Slice 3 (code generation for Python + Playwright + Pytest and Java + Selenium + TestNG) and the
 local Pytest runner are implemented. Next: isolated/sandboxed execution, async run jobs and run artifacts.
 
+## Ports
+
+- Web UI: `http://localhost:3000`
+- Control Plane: `http://localhost:8080`
+- Recorder API: `http://localhost:8090/health`
+- Managed Browser/noVNC: `http://localhost:6080/vnc.html?autoconnect=1&resize=scale`
+- Code Generator: `http://localhost:8100/health`
+- Runner: `http://localhost:8110/health`
+- PostgreSQL: `localhost:5432`
+
+## Data portability
+
+A fresh clone creates a fresh PostgreSQL volume. Workspaces, applications, environments, recorded scenarios, Automation IR versions, and execution history are database data and are not stored in GitHub.
+
+Use the included PowerShell scripts for moving runtime data between machines:
+
+```powershell
+.\scripts\backup-db.ps1
+.\scripts\restore-db.ps1 -BackupFile .\backups\automation_YYYYMMDD_HHMMSS.dump
+```
+
+The restore command requires typing `RESTORE` before changing the local database.
+
+## Target-environment access
+
+The platform itself can run locally with Docker. Executing tests against protected QA environments may additionally require VPN or organization-network access from the machine running the Runner.
+
 ## Security notes
 
 - The `dev` Spring profile (header-based identity) refuses to start unless `PLATFORM_ENV=local`.
 - All published ports bind to `127.0.0.1`.
-- The runner passes only a minimal environment plus the secrets a generated project declares in its
-  `.env.example` to test code. Copy `.env.runtime.example` to `.env.runtime` for local secrets; never commit it.
+- The runner passes test code only a minimal environment plus the secrets the generated project declares in its `.env.example`.
 - Set `POSTGRES_PASSWORD` in your environment to override the local default.
+- `.env.runtime` is ignored by Git.
+- Recorder and runner helper ports are bound to localhost where appropriate.
+- Sensitive inputs are represented as secret references rather than persisted plaintext values.
+- The local noVNC setup is intended for development use and should not be exposed publicly.
+
+## CI
+
+GitHub Actions validates the project structure, runs pytest for the Recorder, Code Generator and Runner services, runs Control Plane tests, and checks the Web build/types.

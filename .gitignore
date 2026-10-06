@@ -14,10 +14,21 @@ runtime-artifacts/
 *.bak-*
 *.log
 *.pyc
-.pytest_cache/
 .env.*
 !.env.example
 !.env.runtime.example
-
-_backup/
 *.tsbuildinfo
+
+# Local databases / exports / test artifacts
+*.sql
+*.zip
+_backup*/
+backups/
+screenshots/
+traces/
+test-results/
+playwright-report/
+
+# Keep database migrations tracked despite the *.sql rule above
+!db/migrations/*.sql
+!services/control-plane/src/main/resources/db/migration/*.sql

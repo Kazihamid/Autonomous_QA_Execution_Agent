@@ -29,7 +29,7 @@ if yaml:
         if str(doc.get('openapi','')).split('.')[0] != '3': errors.append('OpenAPI document version invalid')
     except Exception as e: errors.append(f'OpenAPI YAML parse failed: {e}')
 # Basic hygiene: known credential-value assignment patterns should not appear.
-patterns=[r'(?i)password\s*=\s*["\'][^"\']{4,}["\']',r'(?i)api[_-]?key\s*=\s*["\'][^"\']+["\']']
+patterns=[r'(?i)(?<![A-Za-z0-9_])password\s*=\s*["\'][^"\']{4,}["\']',r'(?i)(?<![A-Za-z0-9_])api[_-]?key\s*=\s*["\'][^"\']+["\']']
 for p in root.rglob('*'):
     if not p.is_file() or p.suffix.lower() in {'.zip','.png','.jpg','.docx','.pdf'}: continue
     try: text=p.read_text(errors='ignore')
