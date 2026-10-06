@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 @Service
 public class RecorderService {
@@ -167,6 +168,79 @@ public class RecorderService {
         return norm(module) + "|" + norm(feature) + "|" + norm(name);
     }
     private static String norm(String v) { return v == null ? "" : v.trim().replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT); }
+
+    private static final java.util.regex.Pattern SECRET_NAME = java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_]{0,63}$");
+
+    /**
+     * Creates a NEW scenario from an existing one with edited parameter defaults and/or renamed secret references.
+     * Only values are edited; the step structure is copied unchanged. Passwords are never stored: a secret is a
+     * reference name whose value lives in the runner's environment (.env.runtime).
+     */
+    @Transactional
+    public RecorderDtos.ScenarioResponse cloneScenario(UUID workspaceId, UUID applicationId, UUID scenarioId, RecorderDtos.CloneScenarioRequest request) {
+        guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
+        TestScenarioEntity source = scenarios.findByIdAndWorkspaceIdAndApplicationId(scenarioId, workspaceId, applicationId)
+            .orElseThrow(() -> new ResourceNotFoundException("Scenario not found."));
+        ScenarioVersionEntity version = versions.findFirstByScenarioIdOrderByVersionNoDesc(scenarioId)
+            .orElseThrow(() -> new ResourceNotFoundException("Scenario version not found."));
+        JsonNode parsed = parse(version.getAutomationIr());
+        if (parsed == null || !parsed.isObject()) throw new ConflictException("The source scenario does not contain valid Automation IR.");
+        ObjectNode ir = ((ObjectNode) parsed).deepCopy();
+
+        String name = request.name().trim();
+        String module = clean(request.moduleName()) != null ? clean(request.moduleName()) : source.getModuleName();
+        String feature = clean(request.featureName()) != null ? clean(request.featureName()) : source.getFeatureName();
+        List<TestScenarioEntity> existing = scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId);
+        String key = scenarioKey(module, feature, name);
+        if (existing.stream().anyMatch(x -> scenarioKey(x.getModuleName(), x.getFeatureName(), x.getName()).equals(key))) {
+            throw new ConflictException("A scenario with this module, feature and name already exists. Choose a different name.");
+        }
+
+        if (request.parameters() != null) {
+            JsonNode params = ir.path("parameters");
+            for (var e : request.parameters().entrySet()) {
+                JsonNode p = params.get(e.getKey());
+                if (p == null || !p.isObject()) throw new IllegalArgumentException("Unknown parameter: " + e.getKey());
+                if (e.getValue() == null || e.getValue().length() > 2000) throw new IllegalArgumentException("Invalid value for parameter: " + e.getKey());
+                ((ObjectNode) p).put("default", e.getValue());
+            }
+        }
+        if (request.secretReferences() != null && !request.secretReferences().isEmpty()) {
+            java.util.Set<String> known = new java.util.HashSet<>();
+            for (JsonNode step : ir.path("steps")) {
+                JsonNode v = step.get("value");
+                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) known.add(v.path("reference").asText());
+            }
+            for (var e : request.secretReferences().entrySet()) {
+                if (!known.contains(e.getKey())) throw new IllegalArgumentException("Unknown secret reference: " + e.getKey());
+                if (e.getValue() == null || !SECRET_NAME.matcher(e.getValue()).matches()) {
+                    throw new IllegalArgumentException("Secret names must be letters, digits and underscores (for example SECRET_PASSWORD_ENV27).");
+                }
+            }
+            for (JsonNode step : ir.path("steps")) {
+                JsonNode v = step.get("value");
+                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) {
+                    String replacement = request.secretReferences().get(v.path("reference").asText());
+                    if (replacement != null) ((ObjectNode) v).put("reference", replacement);
+                }
+            }
+        }
+
+        int next = existing.stream().map(TestScenarioEntity::getExecutionOrder).filter(java.util.Objects::nonNull).max(Integer::compare).orElse(0) + 1;
+        TestScenarioEntity created = scenarios.save(new TestScenarioEntity(workspaceId, applicationId, module, feature, name, next, currentUser.currentUser().getId()));
+        ObjectNode sc = ir.get("scenario") != null && ir.get("scenario").isObject() ? (ObjectNode) ir.get("scenario") : ir.putObject("scenario");
+        sc.put("id", created.getId().toString());
+        sc.put("name", name);
+        ObjectNode meta = ir.get("metadata") != null && ir.get("metadata").isObject() ? (ObjectNode) ir.get("metadata") : ir.putObject("metadata");
+        meta.put("source", "clone");
+        ObjectNode from = meta.putObject("clonedFrom");
+        from.put("scenarioId", source.getId().toString());
+        from.put("scenarioName", source.getName());
+        from.put("version", version.getVersionNo());
+        versions.save(new ScenarioVersionEntity(created.getId(), 1, null, mapper.writeValueAsString(ir), currentUser.currentUser().getId()));
+        audit.success(workspaceId, "SCENARIO_CLONED", "TEST_SCENARIO", created.getId(), Map.of("sourceScenarioId", source.getId().toString(), "name", name));
+        return scenarioResponse(created);
+    }
 
     @Transactional
     public void deleteScenario(UUID workspaceId, UUID applicationId, UUID scenarioId) {

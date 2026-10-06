@@ -166,6 +166,46 @@ paths:
                 scenarioIds: {type: array, items: {type: string, format: uuid}}
       responses:
         '200': {description: Scenarios in their new execution order}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenarios/{scenarioId}/clone:
+    post:
+      summary: Save an edited copy of a scenario as a NEW scenario (parameter defaults and secret names only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string}
+                moduleName: {type: string, nullable: true}
+                featureName: {type: string, nullable: true}
+                parameters: {type: object, additionalProperties: {type: string}}
+                secretReferences: {type: object, additionalProperties: {type: string}}
+      responses:
+        '201': {description: The new scenario}
+        '409': {description: A scenario with that module, feature and name already exists}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenario-actions/run-jobs:
+    post:
+      summary: Start an ordered run as a background job on a chosen environment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenarioIds]
+              properties:
+                scenarioIds: {type: array, items: {type: string, format: uuid}}
+                environmentId: {type: string, format: uuid}
+                stopOnFailure: {type: boolean}
+      responses:
+        '202': {description: Job accepted; poll the job for live status}
+  /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenario-actions/run-jobs/{jobId}:
+    get:
+      summary: Live status of a run job (per-scenario status, step progress and test output)
+      responses:
+        '200': {description: Run job snapshot}
   /api/v1/workspaces/{workspaceId}/applications/{applicationId}/scenarios/{scenarioId}:
     parameters:
       - {$ref: '#/components/parameters/WorkspaceId'}

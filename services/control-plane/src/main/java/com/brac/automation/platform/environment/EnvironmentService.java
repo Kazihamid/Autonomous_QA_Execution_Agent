@@ -80,5 +80,15 @@ public class EnvironmentService {
         return env;
     }
 
+    @Transactional(readOnly=true)
+    public EnvironmentEntity requireExecutable(UUID workspaceId,UUID applicationId,UUID environmentId){
+        guard.requireWrite(workspaceId);applications.entity(workspaceId,applicationId);
+        EnvironmentEntity env=repository.findByIdAndApplicationId(environmentId,applicationId).orElseThrow(() -> new ResourceNotFoundException("Environment not found."));
+        if(!"ACTIVE".equals(env.getStatus())) throw new PolicyViolationException("Environment is not ACTIVE.");
+        if(!env.isAllowExecution()) throw new PolicyViolationException("Test execution is disabled for this environment.");
+        targetValidator.validate(env.getBaseUrl());
+        return env;
+    }
+
     private EnvironmentDtos.Response response(EnvironmentEntity e){return new EnvironmentDtos.Response(e.getId(),e.getApplicationId(),e.getName(),e.getBaseUrl(),e.getDefaultBrowser(),e.isHeadlessDefault(),e.isAllowRecording(),e.isAllowExecution(),e.getValidationStatus(),e.getStatus(),e.getCreatedAt());}
 }

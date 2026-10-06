@@ -15,7 +15,8 @@ public final class ScenarioActionsDtos {
 
     public record RunRequest(
         @NotEmpty @Size(max = 25) List<UUID> scenarioIds,
-        Boolean stopOnFailure) {}
+        Boolean stopOnFailure,
+        UUID environmentId) {}
 
     public record RunResult(
         UUID scenarioId,
@@ -32,4 +33,32 @@ public final class ScenarioActionsDtos {
         int failed,
         int skipped,
         List<RunResult> results) {}
+
+    public record RunItemView(
+        UUID scenarioId,
+        String scenarioName,
+        String status,
+        int currentStep,
+        int totalSteps,
+        String currentAction,
+        java.time.Instant startedAt,
+        long durationMs,
+        String output,
+        String message) {}
+
+    public record RunJobView(
+        UUID jobId,
+        String status,
+        UUID environmentId,
+        String environmentName,
+        String baseUrl,
+        boolean stopOnFailure,
+        java.time.Instant startedAt,
+        java.time.Instant finishedAt,
+        int total,
+        int completed,
+        int passed,
+        int failed,
+        int skipped,
+        List<RunItemView> items) {}
 }

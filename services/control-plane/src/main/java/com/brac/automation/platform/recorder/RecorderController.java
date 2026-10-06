@@ -88,6 +88,12 @@ public class RecorderController {
         return service.reorderScenarios(workspaceId, applicationId, request);
     }
 
+    @PostMapping("/scenarios/{scenarioId}/clone") @ResponseStatus(HttpStatus.CREATED)
+    public RecorderDtos.ScenarioResponse cloneScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId,
+            @Valid @RequestBody RecorderDtos.CloneScenarioRequest request) {
+        return service.cloneScenario(workspaceId, applicationId, scenarioId, request);
+    }
+
     @GetMapping("/scenarios/{scenarioId}")
     public RecorderDtos.ScenarioDetailResponse getScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId) {
         return service.getScenario(workspaceId, applicationId, scenarioId);

@@ -65,4 +65,58 @@ public class RunnerClient {
             return new ScenarioActionsDtos.RunResult(scenarioId, scenarioName, "ERROR", null, 0, "", ex.getMessage());
         }
     }
+
+    /** Snapshot of an asynchronous run on the runner service. */
+    public record RunnerRunStatus(String status, Integer exitCode, long durationMs, String output,
+            int currentStep, int totalSteps, String currentAction, String message) {
+        public boolean terminal() { return !("QUEUED".equals(status) || "RUNNING".equals(status)); }
+    }
+
+    /** Starts an asynchronous run and returns the runner's run id. */
+    public String start(UUID scenarioId, String scenarioName, String targetBaseUrl, int timeoutSeconds,
+            List<CodeGeneratorDtos.GeneratedFile> files) throws Exception {
+        var payload = mapper.createObjectNode();
+        payload.put("scenarioId", scenarioId.toString());
+        payload.put("scenarioName", scenarioName);
+        payload.put("baseUrl", targetBaseUrl);
+        payload.put("timeoutSeconds", timeoutSeconds);
+        payload.set("files", mapper.valueToTree(files));
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/api/v1/runs"))
+            .version(HttpClient.Version.HTTP_1_1)
+            .timeout(Duration.ofSeconds(30))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
+            .build();
+        HttpResponse<String> response = http.send(req, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("Runner HTTP " + response.statusCode() + ": " + response.body());
+        }
+        String runId = mapper.readTree(response.body()).path("runId").asText("");
+        if (runId.isBlank()) throw new IllegalStateException("Runner did not return a run id.");
+        return runId;
+    }
+
+    public RunnerRunStatus poll(String runId) throws Exception {
+        HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/api/v1/runs/" + runId))
+            .version(HttpClient.Version.HTTP_1_1)
+            .timeout(Duration.ofSeconds(15))
+            .header("Accept", "application/json")
+            .GET()
+            .build();
+        HttpResponse<String> response = http.send(req, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("Runner HTTP " + response.statusCode() + ": " + response.body());
+        }
+        JsonNode n = mapper.readTree(response.body());
+        return new RunnerRunStatus(
+            n.path("status").asText("ERROR"),
+            n.path("exitCode").isNull() || n.path("exitCode").isMissingNode() ? null : n.path("exitCode").asInt(),
+            n.path("durationMs").asLong(0),
+            n.path("output").asText(""),
+            n.path("currentStep").asInt(0),
+            n.path("totalSteps").asInt(0),
+            n.path("currentAction").asText(""),
+            n.path("message").asText(""));
+    }
 }

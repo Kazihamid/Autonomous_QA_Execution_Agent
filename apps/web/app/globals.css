@@ -98,3 +98,21 @@ button.danger:hover,.button.danger:hover { background:#8f1c14; }
   .environment-actions { flex-wrap:wrap; }
   .environment-actions-cell { min-width:250px; }
 }
+
+/* ---- live run panel ---- */
+@keyframes qa-spin { to { transform: rotate(360deg); } }
+@keyframes qa-pulse { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+.spin { display:inline-block; width:14px; height:14px; border:2px solid #b8d0e6; border-top-color:var(--primary2); border-radius:50%; animation:qa-spin .8s linear infinite; vertical-align:-2px; }
+.run-panel { margin-top:14px; }
+.run-head { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+.progress { height:10px; background:#e8eff6; border-radius:999px; overflow:hidden; }
+.progress > div { height:100%; background:linear-gradient(90deg,var(--primary),var(--primary2)); transition:width .4s ease; }
+.progress.live > div { animation:qa-pulse 1.4s ease-in-out infinite; }
+.run-item { border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:10px; background:#fff; }
+.run-item.running { border-color:#8eb6d6; background:#f6fbff; }
+.run-item-row { display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap; }
+.run-item .step-bar { height:6px; margin-top:8px; }
+.terminal { margin:8px 0 0; max-height:260px; overflow:auto; padding:12px; border-radius:8px; background:#0f172a; color:#cfe3ff; font:12px/1.5 Consolas,"Courier New",monospace; white-space:pre-wrap; word-break:break-word; }
+.badge.bad { background:#feeceb; color:var(--danger); }
+.form-table input { width:100%; }
+.field-hint { font-size:12px; color:var(--muted); margin-top:4px; }
