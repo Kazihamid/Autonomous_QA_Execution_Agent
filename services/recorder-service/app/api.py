@@ -17,6 +17,9 @@ class AssertionRequest(BaseModel):
     assertionType: str = "visible"
     expected: str | None = None
 
+class PasteRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
 class CheckpointRequest(BaseModel):
     description: str = Field(min_length=1, max_length=500)
 
@@ -82,6 +85,18 @@ async def checkpoint(sid: str, req: CheckpointRequest):
         raise HTTPException(404, "Session not found")
     except Exception as exc:
         raise HTTPException(400, str(exc))
+
+@router.post("/sessions/{sid}/paste")
+async def paste(sid: str, req: PasteRequest):
+    try:
+        await recorder_manager.paste_text(sid, req.text)
+        return {"ok": True}
+    except KeyError:
+        raise HTTPException(404, "Session not found")
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    except Exception:
+        raise HTTPException(400, "Text could not be inserted. Click the field in the browser first.")
 
 @router.post("/sessions/{sid}/finish")
 async def finish(sid: str):

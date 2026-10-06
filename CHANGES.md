@@ -32,3 +32,11 @@
 - **Edit / save as new**: new Edit page per scenario (and "Edit / save as new" on the scenario detail page). You can change parameter values (e.g. user name) and rename secret references (e.g. `SECRET_PASSWORD` → `SECRET_PASSWORD_ENV27`) and save a NEW scenario (`POST .../scenarios/{id}/clone`); the original is untouched. Passwords are still never stored — the value lives in `.env.runtime`.
 - Fixed mojibake (`Â·`) in the top bar.
 - Not verified here: Java compile and the new endpoints against a running stack (Maven Central unreachable from this workspace).
+
+## Pass 4 - per-environment and per-user passwords
+- **Runner** (`runtime_secrets.py`): a scenario's secret name is resolved at run time for the environment (first part of the website address) and user being tested: `NAME_<ENV>_<USER>`, `NAME_<ENV>`, `NAME_<USER>`, `NAME`. Only the variable *name* used is logged, never the value.
+- `.env.runtime` is mounted read-only into the runner and read again on every run: a changed password needs no restart.
+- `.env.runtime.example` documents the convention; `start-project.ps1` creates `.env.runtime` from it when missing.
+- Generated tests wait for sign-in to finish before the next navigation and stop with a clear message when credentials are rejected; failures print `[IR-FAIL]` diagnostics; numeric table targets (e.g. employee PIN) select the first available row.
+- Record Test: Cancel during a take discards it and re-enables Start Recording; "Paste into browser" helper; Scenario Repository gets an Update button and a regrouped toolbar.
+

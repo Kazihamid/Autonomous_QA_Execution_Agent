@@ -68,6 +68,12 @@ public class RecorderController {
         service.addCheckpoint(workspaceId, applicationId, sessionId, request);
     }
 
+    @PostMapping("/recording-sessions/{sessionId}/paste") @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void paste(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID sessionId,
+                      @Valid @RequestBody RecorderDtos.PasteRequest request) {
+        service.pasteText(workspaceId, applicationId, sessionId, request);
+    }
+
     @PostMapping("/recording-sessions/{sessionId}/finish")
     public RecorderDtos.SessionResponse finish(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID sessionId) {
         return service.finish(workspaceId, applicationId, sessionId);
@@ -97,6 +103,12 @@ public class RecorderController {
     @GetMapping("/scenarios/{scenarioId}")
     public RecorderDtos.ScenarioDetailResponse getScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId) {
         return service.getScenario(workspaceId, applicationId, scenarioId);
+    }
+
+    @PutMapping("/scenarios/{scenarioId}")
+    public RecorderDtos.ScenarioResponse updateScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId,
+            @Valid @RequestBody RecorderDtos.UpdateScenarioRequest request) {
+        return service.updateScenario(workspaceId, applicationId, scenarioId, request);
     }
 
     @DeleteMapping("/scenarios/{scenarioId}") @ResponseStatus(HttpStatus.NO_CONTENT)

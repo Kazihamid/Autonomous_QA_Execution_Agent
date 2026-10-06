@@ -22,6 +22,8 @@ public final class RecorderDtos {
         @Size(max=2000) String expected
     ) {}
 
+    public record PasteRequest(@NotBlank @Size(max=2000) String text) {}
+
     public record CheckpointRequest(@NotBlank @Size(max=500) String description) {}
 
     public record SessionResponse(
@@ -58,6 +60,14 @@ public final class RecorderDtos {
     ) {}
 
     public record CloneScenarioRequest(
+        @jakarta.validation.constraints.NotBlank @Size(max=200) String name,
+        @Size(max=120) String moduleName,
+        @Size(max=120) String featureName,
+        java.util.Map<String,String> parameters,
+        java.util.Map<String,String> secretReferences
+    ) {}
+
+    public record UpdateScenarioRequest(
         @jakarta.validation.constraints.NotBlank @Size(max=200) String name,
         @Size(max=120) String moduleName,
         @Size(max=120) String featureName,

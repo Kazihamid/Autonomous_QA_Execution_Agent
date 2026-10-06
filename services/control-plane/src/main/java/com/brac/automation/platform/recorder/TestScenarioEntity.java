@@ -33,5 +33,6 @@ public class TestScenarioEntity {
     public String getStatus(){return status;} public int getCurrentVersion(){return currentVersion;} public Instant getCreatedAt(){return createdAt;}
     public Integer getExecutionOrder(){return executionOrder;}
     public void setExecutionOrder(Integer order){this.executionOrder=order; this.updatedAt=Instant.now();}
+    public void rename(String moduleName,String featureName,String name){this.moduleName=moduleName; this.featureName=featureName; this.name=name; this.updatedAt=Instant.now();}
     public int bumpVersion(){this.currentVersion++; this.updatedAt=Instant.now(); return this.currentVersion;}
 }

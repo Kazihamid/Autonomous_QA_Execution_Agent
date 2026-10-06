@@ -19,9 +19,10 @@ Useful files:
 
 V0.1.2 RUNTIME NOTE
 -------------------
-For scenarios that use secrets, populate .env.runtime locally (for example SECRET_PASSWORD=...).
-Do not commit or share .env.runtime. After changing it, run:
-docker compose up -d --force-recreate runner
+Passwords live in .env.runtime (copy .env.runtime.example; never commit it). The runner picks the password for the
+environment and user being tested, e.g. SECRET_PASSWORD_ERPSTAGING_153872 (one user), SECRET_PASSWORD_ENV27 (all users
+on env27) or SECRET_PASSWORD (fallback). The file is read on every run, so a changed password needs no restart.
+If a run still uses an old value, run: docker compose up -d --force-recreate runner
 
 Existing scenarios recorded before the v0.1.2 locator update may need to be re-recorded.
 

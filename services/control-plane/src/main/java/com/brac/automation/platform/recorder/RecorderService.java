@@ -91,6 +91,14 @@ public class RecorderService {
         audit.success(workspaceId, "RECORDER_CHECKPOINT_ADDED", "RECORDING_SESSION", entity.getId(), Map.of());
     }
 
+    /** Inserts text into the focused field of the managed browser. The text may be a password, so it is never stored, audited or logged. */
+    public void pasteText(UUID workspaceId, UUID applicationId, UUID sessionId, RecorderDtos.PasteRequest request) {
+        guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
+        RecordingSessionEntity entity = entity(workspaceId, applicationId, sessionId);
+        worker.pasteText(entity.getWorkerSessionId(), request.text());
+        audit.success(workspaceId, "RECORDER_TEXT_PASTED", "RECORDING_SESSION", entity.getId(), Map.of("length", request.text().length()));
+    }
+
     @Transactional
     public RecorderDtos.SessionResponse finish(UUID workspaceId, UUID applicationId, UUID sessionId) {
         guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
@@ -196,35 +204,7 @@ public class RecorderService {
             throw new ConflictException("A scenario with this module, feature and name already exists. Choose a different name.");
         }
 
-        if (request.parameters() != null) {
-            JsonNode params = ir.path("parameters");
-            for (var e : request.parameters().entrySet()) {
-                JsonNode p = params.get(e.getKey());
-                if (p == null || !p.isObject()) throw new IllegalArgumentException("Unknown parameter: " + e.getKey());
-                if (e.getValue() == null || e.getValue().length() > 2000) throw new IllegalArgumentException("Invalid value for parameter: " + e.getKey());
-                ((ObjectNode) p).put("default", e.getValue());
-            }
-        }
-        if (request.secretReferences() != null && !request.secretReferences().isEmpty()) {
-            java.util.Set<String> known = new java.util.HashSet<>();
-            for (JsonNode step : ir.path("steps")) {
-                JsonNode v = step.get("value");
-                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) known.add(v.path("reference").asText());
-            }
-            for (var e : request.secretReferences().entrySet()) {
-                if (!known.contains(e.getKey())) throw new IllegalArgumentException("Unknown secret reference: " + e.getKey());
-                if (e.getValue() == null || !SECRET_NAME.matcher(e.getValue()).matches()) {
-                    throw new IllegalArgumentException("Secret names must be letters, digits and underscores (for example SECRET_PASSWORD_ENV27).");
-                }
-            }
-            for (JsonNode step : ir.path("steps")) {
-                JsonNode v = step.get("value");
-                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) {
-                    String replacement = request.secretReferences().get(v.path("reference").asText());
-                    if (replacement != null) ((ObjectNode) v).put("reference", replacement);
-                }
-            }
-        }
+        applyEdits(ir, request.parameters(), request.secretReferences());
 
         int next = existing.stream().map(TestScenarioEntity::getExecutionOrder).filter(java.util.Objects::nonNull).max(Integer::compare).orElse(0) + 1;
         TestScenarioEntity created = scenarios.save(new TestScenarioEntity(workspaceId, applicationId, module, feature, name, next, currentUser.currentUser().getId()));
@@ -240,6 +220,81 @@ public class RecorderService {
         versions.save(new ScenarioVersionEntity(created.getId(), 1, null, mapper.writeValueAsString(ir), currentUser.currentUser().getId()));
         audit.success(workspaceId, "SCENARIO_CLONED", "TEST_SCENARIO", created.getId(), Map.of("sourceScenarioId", source.getId().toString(), "name", name));
         return scenarioResponse(created);
+    }
+
+    /** Applies parameter default and secret-name edits to the IR. Validates every key and value. */
+    private void applyEdits(ObjectNode ir, java.util.Map<String,String> paramEdits, java.util.Map<String,String> secretEdits) {
+        if (paramEdits != null) {
+            JsonNode params = ir.path("parameters");
+            for (var e : paramEdits.entrySet()) {
+                JsonNode p = params.get(e.getKey());
+                if (p == null || !p.isObject()) throw new IllegalArgumentException("Unknown parameter: " + e.getKey());
+                if (e.getValue() == null || e.getValue().length() > 2000) throw new IllegalArgumentException("Invalid value for parameter: " + e.getKey());
+                ((ObjectNode) p).put("default", e.getValue());
+            }
+        }
+        if (secretEdits != null && !secretEdits.isEmpty()) {
+            java.util.Set<String> known = new java.util.HashSet<>();
+            for (JsonNode step : ir.path("steps")) {
+                JsonNode v = step.get("value");
+                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) known.add(v.path("reference").asText());
+            }
+            for (var e : secretEdits.entrySet()) {
+                if (!known.contains(e.getKey())) throw new IllegalArgumentException("Unknown secret reference: " + e.getKey());
+                if (e.getValue() == null || !SECRET_NAME.matcher(e.getValue()).matches()) {
+                    throw new IllegalArgumentException("Secret names must be letters, digits and underscores (for example SECRET_PASSWORD_ENV27).");
+                }
+            }
+            for (JsonNode step : ir.path("steps")) {
+                JsonNode v = step.get("value");
+                if (v != null && v.isObject() && "secret".equals(v.path("source").asText())) {
+                    String replacement = secretEdits.get(v.path("reference").asText());
+                    if (replacement != null) ((ObjectNode) v).put("reference", replacement);
+                }
+            }
+        }
+    }
+
+    /** Updates a scenario in place: edits are saved as the next VERSION of the same scenario (history is kept, no new scenario is created). */
+    @Transactional
+    public RecorderDtos.ScenarioResponse updateScenario(UUID workspaceId, UUID applicationId, UUID scenarioId, RecorderDtos.UpdateScenarioRequest request) {
+        guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
+        TestScenarioEntity scenario = scenarios.findByIdAndWorkspaceIdAndApplicationId(scenarioId, workspaceId, applicationId)
+            .orElseThrow(() -> new ResourceNotFoundException("Scenario not found."));
+        ScenarioVersionEntity latest = versions.findFirstByScenarioIdOrderByVersionNoDesc(scenarioId)
+            .orElseThrow(() -> new ResourceNotFoundException("Scenario version not found."));
+        JsonNode parsed = parse(latest.getAutomationIr());
+        if (parsed == null || !parsed.isObject()) throw new ConflictException("The scenario does not contain valid Automation IR.");
+        ObjectNode ir = ((ObjectNode) parsed).deepCopy();
+
+        String name = request.name().trim();
+        String module = clean(request.moduleName()) != null ? clean(request.moduleName()) : scenario.getModuleName();
+        String feature = clean(request.featureName()) != null ? clean(request.featureName()) : scenario.getFeatureName();
+        String key = scenarioKey(module, feature, name);
+        List<TestScenarioEntity> existing = scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId);
+        if (existing.stream().anyMatch(x -> !x.getId().equals(scenarioId) && scenarioKey(x.getModuleName(), x.getFeatureName(), x.getName()).equals(key))) {
+            throw new ConflictException("Another scenario with this module, feature and name already exists. Choose a different name.");
+        }
+
+        ObjectNode sc = ir.get("scenario") != null && ir.get("scenario").isObject() ? (ObjectNode) ir.get("scenario") : ir.putObject("scenario");
+        sc.put("id", scenario.getId().toString());
+        sc.put("name", name);
+        applyEdits(ir, request.parameters(), request.secretReferences());
+
+        boolean irChanged = !ir.equals(parsed);
+        boolean renamed = !java.util.Objects.equals(module, scenario.getModuleName()) || !java.util.Objects.equals(feature, scenario.getFeatureName()) || !name.equals(scenario.getName());
+        if (!irChanged && !renamed) return scenarioResponse(scenario);
+        if (renamed) scenario.rename(module, feature, name);
+        if (irChanged) {
+            int versionNo = scenario.bumpVersion();
+            ObjectNode meta = ir.get("metadata") != null && ir.get("metadata").isObject() ? (ObjectNode) ir.get("metadata") : ir.putObject("metadata");
+            meta.put("source", "edit");
+            meta.put("editedFromVersion", latest.getVersionNo());
+            versions.save(new ScenarioVersionEntity(scenario.getId(), versionNo, latest.getSourceRecordingSessionId(), mapper.writeValueAsString(ir), currentUser.currentUser().getId()));
+        }
+        scenarios.save(scenario);
+        audit.success(workspaceId, "SCENARIO_UPDATED", "TEST_SCENARIO", scenario.getId(), Map.of("name", name, "version", scenario.getCurrentVersion()));
+        return scenarioResponse(scenario);
     }
 
     @Transactional

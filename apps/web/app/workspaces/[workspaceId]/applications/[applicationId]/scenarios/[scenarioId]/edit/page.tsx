@@ -19,13 +19,13 @@ export default function EditScenario(){
   const [name,setName]=useState("");const [moduleName,setModuleName]=useState("");const [featureName,setFeatureName]=useState("");
   const [params,setParams]=useState<Record<string,string>>({});
   const [secrets,setSecrets]=useState<Record<string,string>>({});
-  const [error,setError]=useState("");const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");const [busy,setBusy]=useState("");
 
   useEffect(()=>{(async()=>{
     try{
       const detail=await api<Detail>(`${base}/scenarios/${scenarioId}`);
       setD(detail);
-      setName(`${detail.scenario.name} (copy)`);
+      setName(detail.scenario.name);
       setModuleName(detail.scenario.moduleName||"");setFeatureName(detail.scenario.featureName||"");
       const p:Record<string,string>={};
       Object.entries(detail.automationIr.parameters||{}).forEach(([k,v])=>{p[k]=v.default==null?"":String(v.default)});
@@ -49,12 +49,24 @@ export default function EditScenario(){
   const changedParams=Object.fromEntries(Object.entries(params).filter(([k,v])=>v!==originalParams[k]));
   const changedSecrets=Object.fromEntries(Object.entries(secrets).filter(([k,v])=>v.trim()!==k).map(([k,v])=>[k,v.trim()]));
 
-  async function save(){
+  const unchangedName=!!d&&name.trim().toLowerCase()===d.scenario.name.trim().toLowerCase()&&moduleName.trim()===(d.scenario.moduleName||"")&&featureName.trim()===(d.scenario.featureName||"");
+  const nothingChanged=unchangedName&&Object.keys(changedParams).length===0&&Object.keys(changedSecrets).length===0;
+  const payload=(n:string)=>JSON.stringify({name:n,moduleName:moduleName.trim()||null,featureName:featureName.trim()||null,parameters:changedParams,secretReferences:changedSecrets});
+
+  async function update(){
     try{
-      setBusy(true);setError("");
-      const created=await api<Created>(`${base}/scenarios/${scenarioId}/clone`,{method:"POST",body:JSON.stringify({name:name.trim(),moduleName:moduleName.trim()||null,featureName:featureName.trim()||null,parameters:changedParams,secretReferences:changedSecrets})});
+      setBusy("update");setError("");
+      await api<Created>(`${base}/scenarios/${scenarioId}`,{method:"PUT",body:payload(name.trim())});
+      router.push(`/workspaces/${workspaceId}/applications/${applicationId}/scenarios/${scenarioId}`);
+    }catch(e){setError((e as Error).message)}finally{setBusy("")}
+  }
+  async function saveAsNew(){
+    try{
+      setBusy("new");setError("");
+      const newName=unchangedName?`${name.trim()} (copy)`:name.trim();
+      const created=await api<Created>(`${base}/scenarios/${scenarioId}/clone`,{method:"POST",body:payload(newName)});
       router.push(`/workspaces/${workspaceId}/applications/${applicationId}/scenarios/${created.id}`);
-    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+    }catch(e){setError((e as Error).message)}finally{setBusy("")}
   }
 
   const back=`/workspaces/${workspaceId}/applications/${applicationId}/scenarios`;
@@ -62,12 +74,12 @@ export default function EditScenario(){
     <div className="breadcrumb"><Link href={back}>Scenario repository</Link><span>/</span><span>{d?.scenario.name??"Scenario"}</span><span>/</span><span>Edit</span></div>
     {error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
     {d&&<>
-      <div className="hero"><div><h1>Edit and save as new scenario</h1><p className="muted">The original scenario (v{d.versionNo}) is not changed. Your edits are saved as a new scenario with its own automation code, generated from the edited values.</p></div></div>
+      <div className="hero"><div><h1>Edit scenario</h1><p className="muted">Currently v{d.versionNo}. <b>Update</b> saves your changes as the next version of this scenario (the automation code is regenerated from them on every run). <b>Save as new</b> leaves this scenario untouched and creates a separate one.</p></div></div>
 
       <section className="card">
         <h2>Scenario details</h2>
         <div className="form-grid">
-          <label>New scenario name<input value={name} onChange={e=>setName(e.target.value)}/></label>
+          <label>Scenario name<input value={name} onChange={e=>setName(e.target.value)}/></label>
           <label>Module<input value={moduleName} onChange={e=>setModuleName(e.target.value)}/></label>
           <label>Feature<input value={featureName} onChange={e=>setFeatureName(e.target.value)}/></label>
         </div>
@@ -84,7 +96,7 @@ export default function EditScenario(){
 
       <section className="card" style={{marginTop:16}}>
         <h2>Secrets (passwords and tokens)</h2>
-        <p className="muted">Passwords are never stored in a scenario. Each one is a <b>secret name</b>; its value is read from the runner&apos;s <code>.env.runtime</code> file when the test runs. To use a different password (for example on another environment), enter a new secret name here, add <code>NEW_NAME=the-password</code> to <code>.env.runtime</code>, and restart the runner.</p>
+        <p className="muted">Passwords are never stored in a scenario. Each one is a <b>secret name</b> (for example <code>SECRET_PASSWORD</code>), not the password itself. When the test runs, the runner reads the password from <code>.env.runtime</code> using the environment and user being tested: <code>NAME_ENV_USER</code>, then <code>NAME_ENV</code>, then <code>NAME_USER</code>, then <code>NAME</code> (for example <code>SECRET_PASSWORD_ENV27</code> for every user on env27). You normally do not need to change the name here.</p>
         {Object.keys(secrets).length===0?<div className="empty">This scenario uses no secrets.</div>:
         <table className="table form-table"><thead><tr><th>Current secret name</th><th>New secret name</th><th>Used by</th></tr></thead><tbody>
           {Object.keys(secrets).map(k=><tr key={k}><td><code>{k}</code></td><td><input value={secrets[k]} onChange={e=>setSecrets({...secrets,[k]:e.target.value})} placeholder="e.g. SECRET_PASSWORD_ENV27"/><div className="field-hint">Letters, digits and underscores only.</div></td><td className="muted small-note">{(usage[k]||[]).join(", ")||"—"}</td></tr>)}
@@ -92,9 +104,10 @@ export default function EditScenario(){
       </section>
 
       <div className="actions" style={{marginTop:16}}>
-        <button onClick={save} disabled={busy||!name.trim()}>{busy?"Saving…":"Save as new scenario"}</button>
+        <button onClick={update} disabled={!!busy||!name.trim()||nothingChanged} title="Save changes to this scenario as a new version">{busy==="update"?"Updating…":"Update scenario"}</button>
+        <button className="secondary" onClick={saveAsNew} disabled={!!busy||!name.trim()} title={unchangedName?"The name will get a (copy) suffix":"Create a separate scenario"}>{busy==="new"?"Saving…":"Save as new scenario"}</button>
         <Link className="button secondary" href={back}>Cancel</Link>
-        <span className="muted small-note" style={{margin:0}}>{Object.keys(changedParams).length} parameter change(s), {Object.keys(changedSecrets).length} secret rename(s)</span>
+        <span className="muted small-note" style={{margin:0}}>{nothingChanged?"No changes yet":`${Object.keys(changedParams).length} parameter change(s), ${Object.keys(changedSecrets).length} secret rename(s)${unchangedName?"":", name/module/feature changed"}`}</span>
       </div>
     </>}
   </AppShell>;

@@ -15,6 +15,8 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app import runtime_secrets
+
 app = FastAPI(title="Autonomous QA Execution Agent Local Runner", version="0.4.0")
 
 
@@ -97,13 +99,21 @@ SAFE_HOST_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR",
                  "PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD")
 
 
-def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, str]) -> dict[str, str]:
+def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, str],
+                    secrets_source: dict[str, str] | None = None, notes: list[str] | None = None) -> dict[str, str]:
     env = {k: os.environ[k] for k in SAFE_HOST_ENV if k in os.environ}
     env.update({"BASE_URL": base_url, "BROWSER": "chromium", "HEADLESS": "true", "PYTHONUNBUFFERED": "1"})
-    # Secrets: only the variables the generated project declares in its .env.example.
+    # Secrets: only the variables the generated project declares in its .env.example. Each is resolved for the
+    # environment and user being tested (see runtime_secrets), from a file that is re-read on every run.
+    source = secrets_source if secrets_source is not None else runtime_secrets.load_source()
     for key in required:
-        if os.environ.get(key):
-            env[key] = os.environ[key]
+        value, used = runtime_secrets.resolve(key, base_url, ir_defaults, source)
+        if value:
+            env[key] = value
+            if notes is not None:
+                notes.append(f"[runner] secret {key} taken from {used}")
+        elif notes is not None:
+            notes.append(f"[runner] secret {key} not found; looked for: " + ", ".join(runtime_secrets.candidates(key, base_url, ir_defaults)))
     for key, value in ir_defaults.items():
         env.setdefault(key, value)
     return env
@@ -133,7 +143,8 @@ def run(request: RunRequest):
 
             runtime_defaults = ir_parameter_defaults(root)
             required = required_runtime_variables(root)
-            env = build_child_env(request.baseUrl, required, runtime_defaults)
+            secret_notes: list[str] = []
+            env = build_child_env(request.baseUrl, required, runtime_defaults, notes=secret_notes)
 
             missing = [key for key in required_runtime_variables(root) if not env.get(key)]
             if missing:
@@ -145,7 +156,7 @@ def run(request: RunRequest):
                     stderr=(
                         "Missing runtime environment variable(s): "
                         + ", ".join(missing)
-                        + ". Configure them in the runner runtime environment (for local Docker, use .env.runtime) and restart the runner."
+                        + ". Add one of the names below to .env.runtime; no restart is needed.\n" + "\n".join(secret_notes)
                     ),
                 )
 
@@ -265,15 +276,18 @@ def _execute_async(rec: dict, request: RunRequest) -> None:
                     _finish(rec, "ERROR", None, "Local runner currently supports Playwright + Pytest implementations only.")
                     return
                 required = required_runtime_variables(root)
-                env = build_child_env(request.baseUrl, required, ir_parameter_defaults(root))
+                secret_notes: list[str] = []
+                env = build_child_env(request.baseUrl, required, ir_parameter_defaults(root), notes=secret_notes)
                 missing = [key for key in required if not env.get(key)]
                 if missing:
                     msg = ("Missing runtime environment variable(s): " + ", ".join(missing)
-                           + ". Configure them in the runner runtime environment (for local Docker, use .env.runtime) and restart the runner.")
+                           + ". Add one of the names below to .env.runtime; no restart is needed.\n" + "\n".join(secret_notes))
                     _append(rec, msg + "\n")
                     _finish(rec, "ERROR", None, msg)
                     return
                 _append(rec, f"[runner] BASE_URL={request.baseUrl}\n")
+                for note in secret_notes:
+                    _append(rec, note + "\n")
                 proc = subprocess.Popen(
                     [sys.executable, "-u", "-m", "pytest", "-q", "-s", "--tb=short", "-p", "no:cacheprovider"],
                     cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,

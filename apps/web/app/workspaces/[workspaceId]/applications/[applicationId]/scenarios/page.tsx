@@ -117,19 +117,27 @@ export default function ScenarioRepository(){
     {failedItem&&!running&&<div className="error" style={{marginBottom:12}}><strong>{failedItem.scenarioName}: {failedItem.status}</strong> — see the test output below.</div>}
 
     <section className="card scenario-toolbar">
-      <div className="actions">
-        <button className="secondary" onClick={toggleAll}>{allSelected?"Clear selection":"Select all"}</button>
-        <span className="badge">{selectedIds.length} selected</span>
-        <label className="muted" style={{display:"inline-flex",gap:6,alignItems:"center"}}>Run on:
-          <select value={envId} onChange={e=>setEnvId(e.target.value)} aria-label="Environment to run on" disabled={running}>
-            {envs.length===0&&<option value="">No runnable environment</option>}
-            {envs.map(x=><option key={x.id} value={x.id}>{x.name} — {x.baseUrl}</option>)}
-          </select>
-        </label>
-        <button onClick={()=>run(selectedIds,"run-bulk")} disabled={!selectedIds.length||running||!envId}>{busy==="run-bulk"?"Running…":`Run selected (in order)${envName?` on ${envName}`:""}`}</button>
-        <label className="muted small-note" style={{display:"inline-flex",gap:6,alignItems:"center",margin:0}}><input type="checkbox" checked={stopOnFailure} onChange={e=>setStopOnFailure(e.target.checked)} disabled={running}/>Stop on first failure</label>
-        <select value={target} onChange={e=>setTarget(e.target.value)} aria-label="Export framework"><option value="PLAYWRIGHT_PYTEST">Python + Playwright + Pytest</option><option value="SELENIUM_TESTNG">Java + Selenium + TestNG</option></select>
-        <button className="secondary" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"}>{busy==="export"?"Exporting…":"Export selected"}</button>
+      <div className="toolbar-row">
+        <div className="toolbar-group">
+          <button className="secondary" onClick={toggleAll}>{allSelected?"Clear selection":"Select all"}</button>
+          <span className="badge">{selectedIds.length} selected</span>
+        </div>
+        <div className="toolbar-group run">
+          <label className="muted toolbar-label">Run on
+            <select value={envId} onChange={e=>setEnvId(e.target.value)} aria-label="Environment to run on" disabled={running}>
+              {envs.length===0&&<option value="">No runnable environment</option>}
+              {envs.map(x=><option key={x.id} value={x.id}>{x.name} — {x.baseUrl}</option>)}
+            </select>
+          </label>
+          <button onClick={()=>run(selectedIds,"run-bulk")} disabled={!selectedIds.length||running||!envId}>{busy==="run-bulk"?"Running…":`Run selected (in order)${envName?` on ${envName}`:""}`}</button>
+          <label className="muted small-note toolbar-check"><input type="checkbox" checked={stopOnFailure} onChange={e=>setStopOnFailure(e.target.checked)} disabled={running}/>Stop on first failure</label>
+        </div>
+        <div className="toolbar-group export">
+          <label className="muted toolbar-label">Export as
+            <select value={target} onChange={e=>setTarget(e.target.value)} aria-label="Export framework"><option value="PLAYWRIGHT_PYTEST">Python + Playwright + Pytest</option><option value="SELENIUM_TESTNG">Java + Selenium + TestNG</option></select>
+          </label>
+          <button className="export-btn" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"}>{busy==="export"?"Exporting…":"Export selected"}</button>
+        </div>
       </div>
       <p className="muted small-note">Scenarios run one after another in the # order shown below (▲▼ to change). The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
     </section>
