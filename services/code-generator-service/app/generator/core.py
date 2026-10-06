@@ -118,7 +118,26 @@ def _is_optional_dismiss(element: dict[str,Any]) -> bool:
             return True
     return False
 
+_OVERLAY_NAMES=r'(?:overlay|backdrop|modal-backdrop|blockui|blockoverlay|loading-overlay|spinner|loader|mask)'
+_OVERLAY_ID_RE=re.compile(r'^'+_OVERLAY_NAMES+r'$', re.I)
+_OVERLAY_CSS_RE=re.compile(r'^(?:div|span|section)?[#.]'+_OVERLAY_NAMES+r'(?:\.[\w-]+)*$', re.I)
+
+def _is_transient_overlay(element: dict[str,Any]) -> bool:
+    """True for recorder clicks on page backdrops/loading overlays (e.g. #overlay).
+
+    These elements appear only while something else is busy or open, so replaying
+    the click fails with a locator timeout on a clean page. They are never a real
+    user control, so generated code skips them.
+    """
+    for candidate in _candidate_list(element):
+        strategy=candidate.get('strategy'); value=str(candidate.get('value') or '').strip()
+        if strategy=='id' and _OVERLAY_ID_RE.match(value): return True
+        if strategy=='css' and _OVERLAY_CSS_RE.match(value): return True
+    return False
+
 def _is_accidental_container_click(element: dict[str,Any]) -> bool:
+    if _is_transient_overlay(element):
+        return True
     desc=str(element.get('description') or '').strip()
     key=str(element.get('key') or '').lower()
     candidates=_candidate_list(element)
@@ -298,6 +317,14 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     continue
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
                 next_step=ordered_steps[step_index+1] if step_index+1 < len(ordered_steps) else {}
+                prev_step=ordered_steps[step_index-1] if step_index > 0 else {}
+                prev_key=str(prev_step.get('element') or '').lower()
+                numeric_table_target=(
+                    str(key or '').isdigit()
+                    and len(str(key or '')) >= 6
+                    and prev_step.get('action')=='click'
+                    and 'search' in prev_key
+                )
                 redundant_field_click=(
                     key
                     and next_step.get('element')==key
@@ -307,6 +334,17 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append(f'    # Skipped redundant field click for {key}; next step supplies the value.')
                 elif key and _is_accidental_container_click(element):
                     lines.append(f'    # Skipped recorder container click for {key}; not a real actionable control.')
+                elif numeric_table_target:
+                    lines.append('    _table_search = page.locator(".dataTables_wrapper:visible input[aria-controls], .dataTables_wrapper:visible input[type=search]").first')
+                    lines.append('    if _table_search.count() > 0 and _table_search.is_visible():')
+                    lines.append('        _table_search.click()')
+                    lines.append('        _table_search.fill("")')
+                    lines.append(f'        _table_search.press_sequentially({_json(str(key))}, delay=120)')
+                    lines.append('        page.wait_for_timeout(1200)')
+                    lines.append(f'    if {loc}.count() == 0:')
+                    lines.append(f'        raise RuntimeError({_json("Recorded table target "+str(key)+" was not found in the current search results. Update the runtime test data or re-record this selection.")})')
+                    lines.append(f'    {loc}.first.wait_for(state="visible", timeout=5000)')
+                    lines.append(f'    {loc}.first.click(timeout=5000)')
                 elif key and _is_optional_dismiss(element):
                     lines.append(f'    if {loc}.count() > 0 and {loc}.first.is_visible():')
                     lines.append(f'        {loc}.first.click(timeout=3000)')

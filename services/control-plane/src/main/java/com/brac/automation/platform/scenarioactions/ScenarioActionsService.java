@@ -162,24 +162,45 @@ public class ScenarioActionsService {
 
     public ScenarioActionsDtos.BulkRunResponse run(UUID workspaceId, UUID applicationId, ScenarioActionsDtos.RunRequest request) {
         guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
-        List<UUID> ids = distinct(request.scenarioIds());
+        // Scenarios always execute in the persisted execution order (not click order), so suites that depend on sequence are deterministic.
+        List<UUID> ids = inExecutionOrder(workspaceId, applicationId, distinct(request.scenarioIds()));
+        boolean stopOnFailure = Boolean.TRUE.equals(request.stopOnFailure());
         List<ScenarioActionsDtos.RunResult> results = new ArrayList<>();
+        String stoppedBy = null;
         for (UUID scenarioId : ids) {
             TestScenarioEntity scenario = scenario(workspaceId, applicationId, scenarioId);
+            if (stoppedBy != null) {
+                results.add(new ScenarioActionsDtos.RunResult(scenarioId, scenario.getName(), "SKIPPED", null, 0, "",
+                    "Skipped: stop-on-failure is on and \"" + stoppedBy + "\" did not pass."));
+                continue;
+            }
+            ScenarioActionsDtos.RunResult result;
             try {
                 CodeGeneratorDtos.ImplementationDetail detail = codeGenerator.generate(
                     workspaceId, applicationId, scenarioId, new CodeGeneratorDtos.GenerateRequest(RUN_TARGET));
                 String baseUrl = baseUrl(workspaceId, applicationId, scenarioId);
-                results.add(runner.run(scenarioId, scenario.getName(), baseUrl, detail.files()));
+                result = runner.run(scenarioId, scenario.getName(), baseUrl, detail.files());
             } catch (Exception ex) {
-                results.add(new ScenarioActionsDtos.RunResult(scenarioId, scenario.getName(), "ERROR", null, 0, "", ex.getMessage()));
+                result = new ScenarioActionsDtos.RunResult(scenarioId, scenario.getName(), "ERROR", null, 0, "", ex.getMessage());
             }
+            results.add(result);
+            if (stopOnFailure && !"PASSED".equals(result.status())) stoppedBy = scenario.getName();
         }
         int passed = (int) results.stream().filter(r -> "PASSED".equals(r.status())).count();
-        int failed = results.size() - passed;
+        int skipped = (int) results.stream().filter(r -> "SKIPPED".equals(r.status())).count();
+        int failed = results.size() - passed - skipped;
         audit.success(workspaceId, "SCENARIO_RUN_REQUESTED", "APPLICATION", applicationId,
-            Map.of("count", ids.size(), "passed", passed, "failed", failed));
-        return new ScenarioActionsDtos.BulkRunResponse(results.size(), passed, failed, results);
+            Map.of("count", ids.size(), "passed", passed, "failed", failed, "skipped", skipped, "stopOnFailure", stopOnFailure));
+        return new ScenarioActionsDtos.BulkRunResponse(results.size(), passed, failed, skipped, results);
+    }
+
+    private List<UUID> inExecutionOrder(UUID workspaceId, UUID applicationId, List<UUID> requested) {
+        if (requested.size() < 2) return requested;
+        List<UUID> ordered = new ArrayList<>();
+        scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId)
+            .forEach(x -> { if (requested.contains(x.getId())) ordered.add(x.getId()); });
+        for (UUID id : requested) if (!ordered.contains(id)) ordered.add(id); // unknown ids fail later with "Scenario not found"
+        return ordered;
     }
 
     private String baseUrl(UUID workspaceId, UUID applicationId, UUID scenarioId) {

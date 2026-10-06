@@ -111,17 +111,62 @@ public class RecorderService {
         if (!"COMPLETED".equals(session.getStatus()) || session.getIrJson() == null || session.getIrJson().isBlank()) {
             throw new ConflictException("Only a COMPLETED recording session with valid Automation IR can be saved as a scenario.");
         }
-        TestScenarioEntity scenario = scenarios.save(new TestScenarioEntity(workspaceId, applicationId, session.getModuleName(), session.getFeatureName(), session.getScenarioName(), currentUser.currentUser().getId()));
-        versions.save(new ScenarioVersionEntity(scenario.getId(), 1, session.getId(), session.getIrJson(), currentUser.currentUser().getId()));
-        audit.success(workspaceId, "SCENARIO_VERSION_CREATED", "TEST_SCENARIO", scenario.getId(), Map.of("version", 1, "recordingSessionId", session.getId()));
+        // 1) Idempotent: the same recording session never produces a second scenario/version.
+        var already = versions.findFirstBySourceRecordingSessionId(session.getId());
+        if (already.isPresent()) {
+            return scenarios.findByIdAndWorkspaceIdAndApplicationId(already.get().getScenarioId(), workspaceId, applicationId)
+                .map(this::scenarioResponse)
+                .orElseThrow(() -> new ResourceNotFoundException("Scenario not found."));
+        }
+        List<TestScenarioEntity> existing = scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId);
+        String key = scenarioKey(session.getModuleName(), session.getFeatureName(), session.getScenarioName());
+        TestScenarioEntity match = existing.stream().filter(x -> scenarioKey(x.getModuleName(), x.getFeatureName(), x.getName()).equals(key)).findFirst().orElse(null);
+        TestScenarioEntity scenario;
+        int versionNo;
+        if (match != null) {
+            // 2) Same module/feature/name (case-insensitive): record as a new VERSION of that scenario, not a duplicate.
+            scenario = match;
+            versionNo = scenario.bumpVersion();
+            scenarios.save(scenario);
+        } else {
+            // 3) New scenario, appended at the end of the execution order.
+            int next = existing.stream().map(TestScenarioEntity::getExecutionOrder).filter(java.util.Objects::nonNull).max(Integer::compare).orElse(0) + 1;
+            scenario = scenarios.save(new TestScenarioEntity(workspaceId, applicationId, session.getModuleName(), session.getFeatureName(), session.getScenarioName(), next, currentUser.currentUser().getId()));
+            versionNo = 1;
+        }
+        versions.save(new ScenarioVersionEntity(scenario.getId(), versionNo, session.getId(), session.getIrJson(), currentUser.currentUser().getId()));
+        audit.success(workspaceId, "SCENARIO_VERSION_CREATED", "TEST_SCENARIO", scenario.getId(), Map.of("version", versionNo, "recordingSessionId", session.getId()));
         return scenarioResponse(scenario);
     }
 
     @Transactional(readOnly=true)
     public List<RecorderDtos.ScenarioResponse> listScenarios(UUID workspaceId, UUID applicationId) {
         guard.requireRead(workspaceId); applications.entity(workspaceId, applicationId);
-        return scenarios.findByWorkspaceIdAndApplicationIdOrderByModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId).stream().map(this::scenarioResponse).toList();
+        return scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId).stream().map(this::scenarioResponse).toList();
     }
+
+    /** Persists the explicit execution order. Listed scenarios come first in the given order; any others keep their relative order after them. */
+    @Transactional
+    public List<RecorderDtos.ScenarioResponse> reorderScenarios(UUID workspaceId, UUID applicationId, RecorderDtos.ReorderRequest request) {
+        guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
+        List<TestScenarioEntity> all = scenarios.findByWorkspaceIdAndApplicationIdOrderByExecutionOrderAscModuleNameAscFeatureNameAscNameAsc(workspaceId, applicationId);
+        java.util.Map<UUID, TestScenarioEntity> byId = new java.util.LinkedHashMap<>();
+        all.forEach(x -> byId.put(x.getId(), x));
+        java.util.LinkedHashSet<UUID> ordered = new java.util.LinkedHashSet<>(request.scenarioIds());
+        for (UUID id : ordered) if (!byId.containsKey(id)) throw new ResourceNotFoundException("Scenario not found: " + id);
+        java.util.List<TestScenarioEntity> finalOrder = new java.util.ArrayList<>();
+        ordered.forEach(id -> finalOrder.add(byId.get(id)));
+        all.stream().filter(x -> !ordered.contains(x.getId())).forEach(finalOrder::add);
+        for (int i = 0; i < finalOrder.size(); i++) finalOrder.get(i).setExecutionOrder(i + 1);
+        scenarios.saveAll(finalOrder);
+        audit.success(workspaceId, "SCENARIO_ORDER_UPDATED", "APPLICATION", applicationId, Map.of("count", finalOrder.size()));
+        return finalOrder.stream().map(this::scenarioResponse).toList();
+    }
+
+    private static String scenarioKey(String module, String feature, String name) {
+        return norm(module) + "|" + norm(feature) + "|" + norm(name);
+    }
+    private static String norm(String v) { return v == null ? "" : v.trim().replaceAll("\\s+", " ").toLowerCase(java.util.Locale.ROOT); }
 
     @Transactional
     public void deleteScenario(UUID workspaceId, UUID applicationId, UUID scenarioId) {
@@ -156,7 +201,7 @@ public class RecorderService {
     }
 
     private RecorderDtos.ScenarioResponse scenarioResponse(TestScenarioEntity s) {
-        return new RecorderDtos.ScenarioResponse(s.getId(), s.getWorkspaceId(), s.getApplicationId(), s.getModuleName(), s.getFeatureName(), s.getName(), s.getStatus(), s.getCurrentVersion(), s.getCreatedAt());
+        return new RecorderDtos.ScenarioResponse(s.getId(), s.getWorkspaceId(), s.getApplicationId(), s.getModuleName(), s.getFeatureName(), s.getName(), s.getStatus(), s.getCurrentVersion(), s.getExecutionOrder(), s.getCreatedAt());
     }
 
     private JsonNode parse(String json) {

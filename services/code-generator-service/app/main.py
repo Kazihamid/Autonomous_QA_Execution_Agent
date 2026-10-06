@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI
+from fastapi import FastAPI
 from app.api import router
 
 app = FastAPI(title="Autonomous QA Execution Agent Code Generator", version="0.3.2")

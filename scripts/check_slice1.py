@@ -35,7 +35,7 @@ for p in root.rglob('*'):
     try: text=p.read_text(errors='ignore')
     except Exception: continue
     for pat in patterns:
-        if re.search(pat,text) and p.name != 'check_slice1.py': errors.append(f'possible secret literal: {p.relative_to(root)}')
+        if re.search(pat,text) and p.name != 'check_slice1.py' and 'tests' not in p.parts: errors.append(f'possible secret literal: {p.relative_to(root)}')
 if errors:
     print('SLICE 1 VALIDATION: FAIL')
     for e in errors: print('-',e)

@@ -14,7 +14,8 @@ public final class ScenarioActionsDtos {
         @NotBlank String target) {}
 
     public record RunRequest(
-        @NotEmpty @Size(max = 25) List<UUID> scenarioIds) {}
+        @NotEmpty @Size(max = 25) List<UUID> scenarioIds,
+        Boolean stopOnFailure) {}
 
     public record RunResult(
         UUID scenarioId,
@@ -29,5 +30,6 @@ public final class ScenarioActionsDtos {
         int total,
         int passed,
         int failed,
+        int skipped,
         List<RunResult> results) {}
 }

@@ -71,6 +71,11 @@ docker compose down
 
 Stopping the project with `docker compose down` preserves PostgreSQL data.
 
+## Status
+
+Vertical Slice 3 (code generation for Python + Playwright + Pytest and Java + Selenium + TestNG) and the
+local Pytest runner are implemented. Next: isolated/sandboxed execution, async run jobs and run artifacts.
+
 ## Ports
 
 - Web UI: `http://localhost:3000`
@@ -100,6 +105,10 @@ The platform itself can run locally with Docker. Executing tests against protect
 
 ## Security notes
 
+- The `dev` Spring profile (header-based identity) refuses to start unless `PLATFORM_ENV=local`.
+- All published ports bind to `127.0.0.1`.
+- The runner passes test code only a minimal environment plus the secrets the generated project declares in its `.env.example`.
+- Set `POSTGRES_PASSWORD` in your environment to override the local default.
 - `.env.runtime` is ignored by Git.
 - Recorder and runner helper ports are bound to localhost where appropriate.
 - Sensitive inputs are represented as secret references rather than persisted plaintext values.
@@ -107,4 +116,4 @@ The platform itself can run locally with Docker. Executing tests against protect
 
 ## CI
 
-GitHub Actions currently validates the project structure, Control Plane tests, and Web build/type checking. Recorder, Code Generator, Runner, and broader integration checks can be added incrementally.
+GitHub Actions validates the project structure, runs pytest for the Recorder, Code Generator and Runner services, runs Control Plane tests, and checks the Web build/types.
