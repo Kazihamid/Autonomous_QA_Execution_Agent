@@ -23,6 +23,10 @@ textarea { min-height:80px; resize:vertical; }
 button,.button { border:0; border-radius:8px; padding:10px 15px; background:var(--primary); color:white; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
 button:hover,.button:hover { background:var(--primary2); }
 button.secondary,.button.secondary { background:#e8eff6; color:#173b5d; }
+button.record,.button.record { background:#d92d20; color:white; }
+button.record:hover,.button.record:hover { background:#b42318; }
+button.tint,.button.tint { background:#fde8e6; color:#8f1c14; border:1px solid #f5c2bd; }
+button.tint:hover,.button.tint:hover { background:#fbd3cf; }
 button:disabled { opacity:.55; cursor:not-allowed; }
 .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
 .badge { display:inline-flex; border-radius:999px; padding:4px 9px; font-size:12px; background:#e8eff6; color:#244c6b; }

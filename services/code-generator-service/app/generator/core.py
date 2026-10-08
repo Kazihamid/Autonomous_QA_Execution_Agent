@@ -127,6 +127,18 @@ def _date_format(element: dict[str,Any]) -> str | None:
             return fmt
     return None
 
+def _is_browse_element(element: dict[str,Any]) -> bool:
+    """True when the recorded target is a Browse / choose-file control that opens the file picker."""
+    desc=str(element.get('description') or '').strip().lower()
+    if desc.startswith('browse') and len(desc) < 30:
+        return True
+    for candidate in _candidate_list(element):
+        value=candidate.get('value')
+        text=str(value.get('name') if isinstance(value,dict) else value or '').strip().lower()
+        if (text.startswith('browse') and len(text) < 30) or 'type="file"' in text or '[type=file]' in text or "type='file'" in text:
+            return True
+    return False
+
 def _is_optional_dismiss(element: dict[str,Any]) -> bool:
     desc=str(element.get('description') or '').strip().lower()
     if desc in {'×','x','close','dismiss','cancel'}:
@@ -345,6 +357,141 @@ def _stay_on_admin(page, requested_url):
 
 '''
 
+_FLOW_HELPER = r'''_POPUP_SELECTOR = ".ui-dialog, .modal, .bootbox, .noty_bar, .noty_message, .swal2-popup, .jconfirm-box, .toast, .alert, [role=dialog], [role=alertdialog], [role=alert]"
+_PROBLEM_WORDS = re.compile(r"no employee is mapped|not mapped|unable to|failed|error|cannot|can not|could not|invalid|not allowed|not found|already exist|already has", re.I)
+_DONE_WORDS = re.compile(r"success|created|saved|submitted", re.I)
+
+
+def _popup_texts(page):
+    # Text of every dialog, modal or notification that is on screen right now.
+    try:
+        return page.evaluate("""(selector) => Array.from(document.querySelectorAll(selector)).filter(e => {
+            const s = getComputedStyle(e); const r = e.getBoundingClientRect();
+            return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
+        }).map(e => (e.innerText || '').trim()).filter(t => t)""", _POPUP_SELECTOR)
+    except Exception:
+        return []
+
+
+def _creation_problem(page, seconds=5):
+    # After a save: the text of an error pop-up if one appears, or "" when the save went through.
+    for _ in range(int(seconds * 2)):
+        for text in _popup_texts(page):
+            if _PROBLEM_WORDS.search(text):
+                return text
+            if _DONE_WORDS.search(text):
+                return ""
+        page.wait_for_timeout(500)
+    return ""
+
+
+def _wait_for_confirm_or_error(page, seconds=6):
+    # After Create: wait for the confirmation button, or for an error pop-up that replaces it.
+    yes = page.get_by_role("button", name="Yes")
+    for _ in range(int(seconds * 2)):
+        try:
+            if yes.first.is_visible():
+                return ""
+        except Exception:
+            pass
+        for text in _popup_texts(page):
+            if _PROBLEM_WORDS.search(text):
+                return text
+        page.wait_for_timeout(500)
+    return ""
+
+
+def _dismiss_popups(page):
+    # Close an error pop-up so the form can be used again.
+    buttons = page.locator(_POPUP_SELECTOR).locator("button, a.close, .close, .ui-dialog-titlebar-close, .noty_close_button")
+    try:
+        total = buttons.count()
+    except Exception:
+        total = 0
+    for i in range(total):
+        button = buttons.nth(i)
+        try:
+            label = (button.inner_text() or button.get_attribute("title") or "").strip().lower()
+            if button.is_visible() and label in ("ok", "close", "x", "×", "cancel", ""):
+                button.click(timeout=2000)
+                page.wait_for_timeout(400)
+        except Exception:
+            continue
+    if _popup_texts(page):
+        page.keyboard.press("Escape")
+    page.wait_for_timeout(500)
+
+
+def _sample_document():
+    # A small real PDF that file pickers accept; set SAMPLE_UPLOAD_FILE to a document of your own to use that instead.
+    own = os.environ.get("SAMPLE_UPLOAD_FILE", "")
+    if own and Path(own).is_file():
+        return Path(own)
+    path = Path(tempfile.gettempdir()) / "Sample_Supporting_Document.pdf"
+    stream = b"BT /F1 18 Tf 20 70 Td (Sample supporting document for automated testing) Tj ET"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 520 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    data = b"%PDF-1.4\n"
+    offsets = []
+    for number, body in enumerate(objects, start=1):
+        offsets.append(len(data))
+        data += str(number).encode() + b" 0 obj\n" + body + b"\nendobj\n"
+    xref = len(data)
+    data += b"xref\n0 " + str(len(objects) + 1).encode() + b"\n0000000000 65535 f \n"
+    for offset in offsets:
+        data += ("%010d 00000 n \n" % offset).encode()
+    data += b"trailer\n<< /Size " + str(len(objects) + 1).encode() + b" /Root 1 0 R >>\nstartxref\n" + str(xref).encode() + b"\n%%EOF\n"
+    path.write_bytes(data)
+    return path
+
+
+def _attach_documents(page):
+    # The recording never captures the file picker, so the sample document goes into every empty file input before the form is saved.
+    if os.environ.get("SAMPLE_UPLOAD", "on").lower() in ("off", "false", "0", "no"):
+        return
+    inputs = page.locator("input[type=file]")
+    try:
+        total = inputs.count()
+    except Exception:
+        total = 0
+    if total == 0:
+        return
+    sample = _sample_document()
+    for i in range(total):
+        field = inputs.nth(i)
+        name = field.get_attribute("id") or field.get_attribute("name") or ("file input " + str(i + 1))
+        try:
+            if field.evaluate("e => e.files && e.files.length > 0"):
+                continue
+            field.set_input_files(str(sample), timeout=5000)
+            print("[IR-UPLOAD] attached " + sample.name + " to " + name, flush=True)
+        except Exception as exc:
+            print("[IR-UPLOAD] could not attach a file to " + name + ": " + str(exc)[:160], flush=True)
+    page.wait_for_timeout(1500)
+
+
+def _click_and_choose_file(page, locator):
+    # Clicking Browse opens the operating system's file picker; answer it with the sample document.
+    try:
+        with page.expect_file_chooser(timeout=5000) as chooser:
+            locator.first.click(timeout=5000)
+        sample = _sample_document()
+        chooser.value.set_files(str(sample))
+        print("[IR-UPLOAD] chose " + sample.name + " in the file picker", flush=True)
+    except Exception as exc:
+        print("[IR-UPLOAD] no file picker opened (" + str(exc)[:100] + "); filling the file inputs directly", flush=True)
+        _attach_documents(page)
+        return
+    page.wait_for_timeout(1500)
+
+
+'''
+
 def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     scenario=ir.get('scenario') or {}; scenario_name=scenario.get('name','Generated Scenario')
     module=_snake(scenario_name); cls=_pascal(scenario_name)+'Page'; test_fn='test_'+_snake(scenario_name)
@@ -373,14 +520,56 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files={}
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
-    lines=['import base64','import datetime','import os','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
-    _i=lines.index('def _goto_with_retry(page, url):'); lines[_i:_i]=_SETTLE_HELPER.split('\n')
+    lines=['import base64','import datetime','import os','import tempfile','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"','    _skip = 0']
+    _i=lines.index('def _goto_with_retry(page, url):'); lines[_i:_i]=_SETTLE_HELPER.split('\n')+_FLOW_HELPER.split('\n')
     source_map={}
     ordered_steps=_ordered_steps(ir)
+    # When a recorded employee PIN is picked from a list and a later click saves the form, the part from opening the list to saving
+    # is repeated with the next employee while the application answers with an error pop-up (for example a missing approval mapping).
+    def _is_row_pick(candidate_step):
+        pick_key=str(candidate_step.get('element') or '')
+        return candidate_step.get('action')=='click' and pick_key.isdigit() and len(pick_key)>=6
+    retry_start=retry_end=create_idx=confirm_idx=None
+    pick_idx=next((i for i,x in enumerate(ordered_steps) if _is_row_pick(x)),None)
+    if pick_idx is not None:
+        create_idx=next((i for i in range(pick_idx+1,len(ordered_steps)) if ordered_steps[i].get('action')=='click' and re.search(r'create|save|submit',str(ordered_steps[i].get('element') or ''),re.I)),None)
+    if create_idx is not None:
+        retry_start=pick_idx-1 if pick_idx>0 and ordered_steps[pick_idx-1].get('action')=='click' else pick_idx
+        retry_end=create_idx
+        if create_idx+1<len(ordered_steps):
+            after_create=ordered_steps[create_idx+1]
+            if after_create.get('action')=='click' and _is_button_element(elements.get(str(after_create.get('element') or '')) or {}):
+                confirm_idx=create_idx+1; retry_end=confirm_idx
+        if any(ordered_steps[i].get('action')=='navigate' for i in range(retry_start,retry_end+1)):
+            retry_start=retry_end=create_idx=confirm_idx=None
+    block_start=block_end=None
+    # A recording that signed in, then navigated back to the sign-in page and signed in again (for example after a typing mistake)
+    # must not repeat the sign-in when the first attempt already worked: that page answers "You are already logged in".
+    _signin_url=re.compile(r'/(idp|auth)/realms/|/protocol/openid-connect/|/login-actions/')
+    def _is_signin_navigation(candidate_step):
+        return candidate_step.get('action')=='navigate' and bool(_signin_url.search(str(candidate_step.get('url') or '')))
+    signin_start=signin_end=None
+    if ordered_steps and _is_signin_navigation(ordered_steps[0]):
+        signin_start=next((i for i in range(1,len(ordered_steps)) if _is_signin_navigation(ordered_steps[i])),None)
+        if signin_start is not None:
+            after_signin=next((i for i in range(signin_start+1,len(ordered_steps)) if ordered_steps[i].get('action')=='navigate' and not _is_signin_navigation(ordered_steps[i])),None)
+            if after_signin is None: signin_start=None
+            else: signin_end=after_signin-1
+    sign_block_start=sign_block_end=None
     for step_index,step in enumerate(ordered_steps):
+        if signin_start is not None and step_index==signin_start:
+            lines.append('    _settle(page)')
+            sign_block_start=len(lines)
+        if signin_end is not None and step_index==signin_end+1: sign_block_end=len(lines)
+        if retry_start is not None and step_index==retry_start: block_start=len(lines)
+        if retry_end is not None and step_index==retry_end+1: block_end=len(lines)
         sid=str(step['id']); action=step['action']; source_map[sid]={'file':f'tests/test_{module}.py','line':len(lines)+1}
         lines.append(f'    # IR-STEP: {sid}')
         lines.append(f'    print("[IR-STEP] {sid} {action} ({step_index+1}/{len(ordered_steps)})", flush=True)')
+        if action=='click' and re.search(r'create|save|submit',str(step.get('element') or ''),re.I):
+            lines.append('    _attach_documents(page)')
+        if confirm_idx is not None and step_index==confirm_idx:
+            lines += ['    _problem = _wait_for_confirm_or_error(page)', '    if _problem:', '        return _problem']
         if action=='navigate':
             if step_index>0 and ordered_steps[step_index-1].get('action') in {'click','keyboard'}:
                 lines.append('    _settle(page)')
@@ -443,6 +632,9 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append('    _field.press("Tab")')
                     lines.append('    page.wait_for_timeout(500)')
                     lines.append(f'    print({_json("[IR-DATE] "+sid+": after leaving the field it holds ")} + repr(_field.input_value()), flush=True)')
+                elif key and _is_browse_element(element):
+                    lines.append('    # Browse opens the operating system\'s file picker, which a recording cannot capture; a sample document is chosen instead.')
+                    lines.append(f'    _click_and_choose_file(page, {loc})')
                 elif numeric_table_target:
                     lines.append('    _grid = page.locator(".dataTables_wrapper:visible")')
                     lines.append('    try:')
@@ -455,12 +647,16 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append('        if _search.count() > 0 and _search.is_visible() and _search.input_value():')
                     lines.append('            _search.fill("")')
                     lines.append('            page.wait_for_timeout(1000)')
-                    lines.append('        _row = _grid.locator("tbody tr:not(:has(td.dataTables_empty))").first')
+                    lines.append('        _rows = _grid.locator("tbody tr:not(:has(td.dataTables_empty))")')
+                    lines.append('        _row = _rows.first')
                     lines.append('        try:')
                     lines.append('            _row.wait_for(state="visible", timeout=15000)')
                     lines.append('        except Exception:')
                     lines.append(f'            raise RuntimeError({_json("The table has no rows to select (recorded target "+str(key)+"). Make sure the list contains at least one record.")})')
-                    lines.append('        print("[IR-ROW] selecting first row: " + " | ".join(t.strip() for t in _row.locator("td").all_inner_texts())[:200], flush=True)')
+                    lines.append('        if _skip >= _rows.count():')
+                    lines.append('            raise RuntimeError("No employee left to try: the list shows " + str(_rows.count()) + " row(s) and every one of them was rejected.")')
+                    lines.append('        _row = _rows.nth(_skip)')
+                    lines.append('        print("[IR-ROW] selecting row " + str(_skip + 1) + ": " + " | ".join(t.strip() for t in _row.locator("td").all_inner_texts())[:200], flush=True)')
                     lines.append('        try:')
                     lines.append('            print("[IR-ROW-HTML] " + _row.evaluate("e => e.outerHTML")[:400], flush=True)')
                     lines.append('        except Exception:')
@@ -555,6 +751,30 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 lines.append(f'    assert {var} is not None')
         elif action=='checkpoint': lines.append(f'    # Checkpoint: {str(step.get("description", "")).replace(chr(10)," ")}')
         elif action=='wait': lines.append('    page.wait_for_load_state("domcontentloaded")')
+    def _wrap_block(start,end,head,tail):
+        inner=['    '+x if x else x for x in lines[start:end]]
+        wrapped=head+inner+tail
+        shift_after=len(wrapped)-(end-start)
+        for _entry in source_map.values():
+            if start < _entry['line'] <= end: _entry['line']+=len(head)
+            elif _entry['line'] > end: _entry['line']+=shift_after
+        lines[start:end]=wrapped
+    _wraps=[]
+    if retry_start is not None and block_start is not None:
+        if block_end is None: block_end=len(lines)
+        _wraps.append((block_start,block_end,['    def _attempt(_skip):'],[
+            '        return _creation_problem(page)','',
+            '    _tries = 0','    while True:','        _problem = _attempt(_tries)','        if not _problem:','            break',
+            '        print("[IR-RETRY] employee " + str(_tries + 1) + " was rejected: " + " ".join(_problem.split())[:300], flush=True)',
+            '        _tries += 1','        if _tries >= 10:',
+            '            raise AssertionError("The proposal could not be created with any of the first 10 employees. Last message: " + " ".join(_problem.split())[:300])',
+            '        _dismiss_popups(page)']))
+    if signin_start is not None and sign_block_start is not None and sign_block_end is not None:
+        _first=str(ordered_steps[signin_start]['id']); _last=str(ordered_steps[signin_end]['id'])
+        _wraps.append((sign_block_start,sign_block_end,['    if _SIGN_IN_URL.search(page.url):'],[
+            '    else:',
+            f'        print({_json("[IR-SKIP] "+_first+" to "+_last+": the browser is already signed in, so the recorded second sign-in is skipped.")}, flush=True)']))
+    for _w in sorted(_wraps,key=lambda w:w[0],reverse=True): _wrap_block(*_w)
     files[f'tests/test_{module}.py']='\n'.join(lines)+'\n'; files['tests/__init__.py']=''
     files['tests/conftest.py']='''import os
 import pytest
