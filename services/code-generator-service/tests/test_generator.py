@@ -188,3 +188,52 @@ def test_navigation_steps_call_stay_on_admin():
     out = generate_project(req("PLAYWRIGHT_PYTEST"))
     test = next(x["content"] for x in out["files"] if x["path"].startswith("tests/test_"))
     assert "_stay_on_admin(page, _target)" in test and "def _stay_on_admin(" in test
+
+
+def test_click_fallback_to_navigation_is_reported_in_the_run_output():
+    import ast, copy
+    ir = copy.deepcopy(IR)
+    ir["steps"][-1]["metadata"] = {"navigatedTo": "https://qa.example.com/done"}
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    test = next(x["content"] for x in out["files"] if x["path"].startswith("tests/test_"))
+    ast.parse(test)
+    assert "[IR-WARN] step-004" in test and "did not happen" in test
+    assert test.index("[IR-WARN] step-004") < test.index('page.goto(base_url.rstrip("/") + "/done")')
+
+
+def _date_ir(extra_step=None, yes_role="button"):
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["elements"]["last-working-date"] = {"preferred": {"strategy": "role", "value": {"role": "textbox", "name": "DD-MM-YYYY"}}, "alternatives": [{"strategy": "id", "value": "lastWorkingDate"}]}
+    ir["elements"]["yes"] = {"preferred": {"strategy": "role", "value": {"role": yes_role, "name": "Yes"}}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [
+        {"id": "step-005", "action": "click", "element": "last-working-date"},
+        {"id": "step-006", "action": "click", "element": "yes", "metadata": {"navigatedTo": "https://qa.example.com/list"}},
+    ]
+    return ir
+
+
+def _test_source(ir):
+    import ast
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    test = next(x["content"] for x in out["files"] if x["path"].startswith("tests/test_"))
+    ast.parse(test)
+    return test
+
+
+def test_click_on_an_empty_date_field_sets_a_future_date():
+    test = _test_source(_date_ir())
+    body = test.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]
+    assert "import datetime" in test
+    assert '.strftime("%d-%m-%Y")' in body and "[IR-DATE] step-005" in body
+    assert "if not any(ch.isdigit() for ch in _field.input_value()):" in body and "press_sequentially" in body and '_field.press("Tab")' in body and "Escape" not in body.replace("not Escape", "")  # an input mask such as __-__-____ counts as empty; Escape would undo the typed value
+    assert "_field = page.locator(" in body and "lastWorkingDate" in body  # the field's own id, not the shared placeholder
+
+
+def test_missing_button_fails_instead_of_opening_another_page_but_links_still_fall_back():
+    button = _test_source(_date_ir(yes_role="button")).split("# IR-STEP: step-006")[1]
+    assert 'page.goto(base_url.rstrip("/") + "/list")' not in button and "dispatch_event" in button
+    link = _test_source(_date_ir(yes_role="link")).split("# IR-STEP: step-006")[1]
+    assert 'page.goto(base_url.rstrip("/") + "/list")' in link

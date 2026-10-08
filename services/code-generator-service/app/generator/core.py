@@ -102,6 +102,31 @@ def _pw_locator(element: dict[str,Any], owner='self.page') -> str:
 def _has_locator(element: dict[str,Any]) -> bool:
     return bool(_candidate_list(element))
 
+def _is_button_element(element: dict[str,Any]) -> bool:
+    """True when the recorded target is a button (a dialog or form button), not a link."""
+    for candidate in _candidate_list(element):
+        value=candidate.get('value')
+        return candidate.get('strategy')=='role' and isinstance(value,dict) and str(value.get('role') or '').lower()=='button'
+    return False
+
+def _id_of(element: dict[str,Any]) -> str | None:
+    for candidate in _candidate_list(element):
+        if candidate.get('strategy')=='id' and candidate.get('value'):
+            return str(candidate['value'])
+    return None
+
+_DATE_MASK=re.compile(r'^(?:D{1,2}|M{1,2}|Y{4}|Y{2})([-/. ])(?:D{1,2}|M{1,2}|Y{4}|Y{2})\1(?:D{1,2}|M{1,2}|Y{4}|Y{2})$', re.I)
+
+def _date_format(element: dict[str,Any]) -> str | None:
+    """strftime format when the target is a date field whose placeholder or label is a date mask such as DD-MM-YYYY."""
+    for candidate in _candidate_list(element):
+        value=candidate.get('value')
+        text=str(value.get('name') if isinstance(value,dict) else value or '').strip()
+        if text and _DATE_MASK.match(text):
+            fmt=text.upper().replace('YYYY','%Y').replace('YY','%y').replace('DD','%d').replace('D','%d').replace('MM','%m').replace('M','%m')
+            return fmt
+    return None
+
 def _is_optional_dismiss(element: dict[str,Any]) -> bool:
     desc=str(element.get('description') or '').strip().lower()
     if desc in {'×','x','close','dismiss','cancel'}:
@@ -348,7 +373,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files={}
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
-    lines=['import base64','import os','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
+    lines=['import base64','import datetime','import os','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"']
     _i=lines.index('def _goto_with_retry(page, url):'); lines[_i:_i]=_SETTLE_HELPER.split('\n')
     source_map={}
     ordered_steps=_ordered_steps(ir)
@@ -398,6 +423,26 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append(f'    # Skipped redundant field click for {key}; next step supplies the value.')
                 elif key and _is_accidental_container_click(element):
                     lines.append(f'    # Skipped recorder container click for {key}; not a real actionable control.')
+                elif key and _date_format(element):
+                    _js="(e, v) => { e.removeAttribute('readonly'); e.value = v; e.dispatchEvent(new Event('input', {bubbles: true})); e.dispatchEvent(new Event('change', {bubbles: true})); }"
+                    lines.append('    # The recording opened the calendar but did not keep the day that was picked, so a date is set if the field stays empty.')
+                    # Pages often have several date fields with the same placeholder, so the field's own id is used when it is known.
+                    _date_id=_id_of(element)
+                    _field_loc=f'page.locator({_json("[id="+chr(34)+_date_id+chr(34)+"]")})' if _date_id else loc
+                    lines.append(f'    _field = {_field_loc}.first')
+                    lines.append('    _field.click(timeout=5000)')
+                    lines.append(f'    print({_json("[IR-DATE] "+sid+": the date field holds ")} + repr(_field.input_value()) + " after opening the calendar", flush=True)')
+                    lines.append('    if not any(ch.isdigit() for ch in _field.input_value()):')
+                    lines.append(f'        _when = (datetime.date.today() + datetime.timedelta(days=30)).strftime({_json(_date_format(element))})')
+                    lines.append(f'        print({_json("[IR-DATE] "+sid+": the date field was empty after opening the calendar; typing ")} + _when, flush=True)')
+                    lines.append('        _field.press_sequentially("".join(ch for ch in _when if ch.isdigit()), delay=40)')
+                    lines.append('        if _field.input_value() != _when:')
+                    lines.append(f'            _field.evaluate({_json(_js)}, _when)')
+                    lines.append(f'        print({_json("[IR-DATE] "+sid+": the date field now holds ")} + repr(_field.input_value()), flush=True)')
+                    # Tab (not Escape) leaves the field: on a masked input Escape undoes the typed value.
+                    lines.append('    _field.press("Tab")')
+                    lines.append('    page.wait_for_timeout(500)')
+                    lines.append(f'    print({_json("[IR-DATE] "+sid+": after leaving the field it holds ")} + repr(_field.input_value()), flush=True)')
                 elif numeric_table_target:
                     lines.append('    _grid = page.locator(".dataTables_wrapper:visible")')
                     lines.append('    try:')
@@ -451,8 +496,10 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append(f'        {loc}.first.click(timeout=5000)')
                     lines.append('    except Exception:')
                     navigated_to=(step.get('metadata') or {}).get('navigatedTo')
-                    if navigated_to:
+                    if navigated_to and not _is_button_element(element):
                         rel=_relative_url(navigated_to)
+                        _warn=f"[IR-WARN] {sid}: could not click the recorded target ({key}); opened {rel} instead, so the action that click performs did not happen."
+                        lines.append(f'        print({_json(_warn)}, flush=True)')
                         lines.append(f'        page.goto(base_url.rstrip("/") + {_json(rel)})')
                     else:
                         lines.append(f'        {loc}.first.dispatch_event("click", timeout=3000)')
@@ -583,6 +630,11 @@ def _diagnose(pg):
     try:
         form = " ".join(pg.inner_text("form", timeout=3000).split())
         say("form text: " + form[:900])
+    except Exception:
+        pass
+    try:
+        notes = pg.eval_on_selector_all(".error, .errorMessage, label.error, .field-error, .ui-state-error, .alert, .toast, .noty_message, .invalid-feedback, .help-block", "els => els.filter(e => e.offsetParent !== null).map(e => (e.innerText || '').trim()).filter(t => t)")
+        say("validation messages: " + (" | ".join(notes)[:600] if notes else "none"))
     except Exception:
         pass
     try:
