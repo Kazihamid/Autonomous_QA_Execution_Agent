@@ -36,6 +36,21 @@ class RecorderManager:
     def has_active_session(self) -> bool:
         return any(rt.model.status not in TERMINAL for rt in self.sessions.values())
 
+    async def discard_active(self) -> int:
+        """Ends every session that is still open and closes its browser.
+
+        The MVP worker drives a single managed browser. A session that was left open (a closed tab, a recording that was never
+        finished or cancelled) would otherwise block every later recording until the worker was restarted.
+        """
+        ended = 0
+        for rt in list(self.sessions.values()):
+            if rt.model.status in TERMINAL:
+                continue
+            rt.model.status = SessionStatus.CANCELLED
+            await self._cleanup(rt)
+            ended += 1
+        return ended
+
     async def create_session(self, start_url: str, browser: str = "chromium", headless: bool = False, scenario_name: str = "Recorded Scenario") -> RecordingSession:
         sid = str(uuid.uuid4())
         model = RecordingSession(

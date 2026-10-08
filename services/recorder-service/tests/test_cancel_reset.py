@@ -36,3 +36,18 @@ def test_paste_requires_active_session():
     rt = _session(SessionStatus.CANCELLED)
     with pytest.raises(ValueError):
         asyncio.run(_mgr(rt).paste_text("s1", "abc"))
+
+
+@pytest.mark.parametrize("status", [SessionStatus.READY, SessionStatus.RECORDING, SessionStatus.PAUSED])
+def test_a_session_left_open_is_ended_so_a_new_recording_can_start(status):
+    rt = _session(status)
+    mgr = _mgr(rt)
+    assert mgr.has_active_session()
+    assert asyncio.run(mgr.discard_active()) == 1
+    assert rt.model.status == SessionStatus.CANCELLED and not mgr.has_active_session()
+
+
+def test_finished_sessions_are_not_touched_when_discarding():
+    rt = _session(SessionStatus.COMPLETED)
+    assert asyncio.run(_mgr(rt).discard_active()) == 0
+    assert rt.model.status == SessionStatus.COMPLETED

@@ -25,8 +25,9 @@ class CheckpointRequest(BaseModel):
 
 @router.post("/sessions")
 async def create_session(req: CreateSession):
-    if recorder_manager.has_active_session():
-        raise HTTPException(409, "A managed browser recording session is already active in this MVP worker.")
+    # Only one managed browser runs in this worker, and the newest request wins: an earlier session that was left open
+    # (for example a closed browser tab) is ended here instead of blocking every new recording.
+    await recorder_manager.discard_active()
     model = await recorder_manager.create_session(req.startUrl, req.browser, req.headless, req.scenarioName)
     if model.status.value == "FAILED":
         raise HTTPException(502, model.error or "Managed browser failed to start.")
