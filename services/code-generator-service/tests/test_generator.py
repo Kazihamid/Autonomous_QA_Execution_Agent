@@ -149,3 +149,42 @@ def test_numeric_table_target_selects_first_row_not_the_recorded_pin():
     assert "tbody tr:not(:has(td.dataTables_empty))" in body and "[IR-ROW]" in body
     assert "press_sequentially" not in body  # the recorded PIN is no longer typed into the search box
     assert 'for _how in ("link", "cell", "row", "double")' in body and "row picked by" in body and "[IR-ROW-HTML]" in body
+
+
+def test_stay_on_admin_swaps_the_auth_landing_page_for_the_admin_page():
+    from app.generator import core
+    ns = {}
+    exec(core._SETTLE_HELPER, ns)
+
+    class Page:
+        def __init__(self, url):
+            self.url = url
+            self.went = []
+        def goto(self, url, wait_until=None):
+            self.went.append(url)
+            self.url = url
+        def wait_for_load_state(self, state=None, timeout=None):
+            pass
+        def wait_for_timeout(self, ms):
+            pass
+
+    # asked for /admin/login, the site answered with its /auth/login landing page
+    page = Page("https://er-panel-stg.bracits.net/auth/login?next=1")
+    ns["_stay_on_admin"](page, "https://er-panel-stg.bracits.net/admin/login")
+    assert page.went == ["https://er-panel-stg.bracits.net/admin/login?next=1"]
+
+    # already on the admin page: nothing happens
+    page = Page("https://er-panel-stg.bracits.net/admin/login")
+    ns["_stay_on_admin"](page, "https://er-panel-stg.bracits.net/admin/login")
+    assert page.went == []
+
+    # a non-admin request that lands on an /auth/ page is left alone
+    page = Page("https://erp.example.net/auth/realms/brac/protocol/openid-connect/auth")
+    ns["_stay_on_admin"](page, "https://erp.example.net/idp/realms/brac/protocol/openid-connect/auth")
+    assert page.went == []
+
+
+def test_navigation_steps_call_stay_on_admin():
+    out = generate_project(req("PLAYWRIGHT_PYTEST"))
+    test = next(x["content"] for x in out["files"] if x["path"].startswith("tests/test_"))
+    assert "_stay_on_admin(page, _target)" in test and "def _stay_on_admin(" in test
