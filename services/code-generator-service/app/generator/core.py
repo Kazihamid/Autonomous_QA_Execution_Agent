@@ -274,6 +274,7 @@ def _secret_scan(files: dict[str,str]) -> dict[str,Any]:
     return {'status':'PASS' if not findings else 'FAIL','findings':findings}
 
 _SETTLE_HELPER = '''import re
+from urllib.parse import urlsplit, urlunsplit
 
 _SIGN_IN_URL = re.compile(r"/(idp|auth)/realms/|/protocol/openid-connect/|/login-actions/")
 
@@ -290,6 +291,31 @@ def _settle(page, timeout=25000):
         page.wait_for_load_state("networkidle", timeout=timeout)
     except Exception:
         pass
+
+
+def _stay_on_admin(page, requested_url):
+    # Some admin portals answer an /admin/ address with their /auth/ landing page (for example a page that only offers SSO).
+    # When an /admin/ page was requested and the browser ended on the matching /auth/ page, open the /admin/ page instead.
+    wanted = urlsplit(requested_url)
+    if not wanted.path.startswith("/admin"):
+        return
+    # The site may redirect a moment after the page loads, so let the page settle before looking at the address.
+    try:
+        page.wait_for_load_state("networkidle", timeout=8000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1000)
+    landed = urlsplit(page.url)
+    if landed.path.startswith("/auth/"):
+        fixed = landed._replace(path="/admin/" + landed.path[len("/auth/"):])
+        print("[runner] redirected to " + landed.path + "; opening " + fixed.path + " instead", flush=True)
+        page.goto(urlunsplit(fixed), wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1000)
+        print("[runner] now on " + urlsplit(page.url).path, flush=True)
 
 
 '''
@@ -344,7 +370,9 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 rel=_relative_url(step.get('url'))
                 origin=_origin(step.get('url'))
                 rel_expr=f'_rebase({_json(rel)}, {_json(origin)}, base_url)' if _embeds_origin(rel,origin) else _json(rel)
-                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {rel_expr})')
+                lines.append(f'    _target = base_url.rstrip("/") + {rel_expr}')
+                lines.append('    _goto_with_retry(page, _target)')
+                lines.append('    _stay_on_admin(page, _target)')
             lines.append('    page.wait_for_load_state("domcontentloaded")')
         elif action in {'click','fill','select','check','uncheck','uploadFile','keyboard','assert','extractValue'}:
             key=step.get('element')

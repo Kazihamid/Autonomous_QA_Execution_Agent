@@ -84,7 +84,7 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/automation
       POSTGRES_USER: automation
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-only-password}
-      PLATFORM_ALLOW_PRIVATE_TARGETS: "false"
+      PLATFORM_ALLOW_PRIVATE_TARGETS: "${PLATFORM_ALLOW_PRIVATE_TARGETS:-false}"
       PLATFORM_ALLOWED_TARGET_HOSTS: ""
       RECORDER_SERVICE_URL: http://recorder:8090
       CODE_GENERATOR_SERVICE_URL: http://code-generator:8100
