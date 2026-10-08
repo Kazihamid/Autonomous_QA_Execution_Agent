@@ -76,7 +76,16 @@ button.danger:hover,.button.danger:hover { background:#8f1c14; }
 .compact { padding:7px 10px; font-size:12px; }
 .scenario-toolbar { margin-bottom:14px; }
 .scenario-toolbar select { width:auto; min-width:250px; }
-.scenario-table { min-width:980px; }
+.scenario-table { min-width:860px; }
+.module-group summary.group-head { display:flex; align-items:center; gap:10px; cursor:pointer; list-style:none; padding:2px 0 10px; border-bottom:2px solid var(--line); }
+.module-group summary.group-head::-webkit-details-marker { display:none; }
+.module-group summary.group-head h2 { margin:0; font-size:20px; }
+.module-group summary.group-head::before { content:'\25BE'; color:#526579; }
+.module-group details:not([open]) summary.group-head::before { content:'\25B8'; }
+.module-group input[type="checkbox"] { width:18px; height:18px; }
+.feature-group { margin:14px 0 4px 18px; padding-left:14px; border-left:3px solid #cfe0ef; }
+.feature-head { display:flex; align-items:center; gap:10px; margin-bottom:6px; }
+.feature-head h3 { margin:0; font-size:16px; color:#244c6b; }
 .scenario-table input[type="checkbox"] { width:18px; height:18px; }
 .table-link { font-weight:700; color:#0f4c81; }
 .small-note { margin:10px 0 0; font-size:12px; }
