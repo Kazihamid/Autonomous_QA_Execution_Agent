@@ -237,3 +237,84 @@ def test_missing_button_fails_instead_of_opening_another_page_but_links_still_fa
     assert 'page.goto(base_url.rstrip("/") + "/list")' not in button and "dispatch_event" in button
     link = _test_source(_date_ir(yes_role="link")).split("# IR-STEP: step-006")[1]
     assert 'page.goto(base_url.rstrip("/") + "/list")' in link
+
+
+def _employee_ir(with_navigate=False):
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["elements"]["search-btn"] = {"preferred": {"strategy": "id", "value": "searchBtn"}, "alternatives": []}
+    ir["elements"]["00155707"] = {"preferred": {"strategy": "text", "value": "00155707"}, "alternatives": []}
+    ir["elements"]["create-button"] = {"preferred": {"strategy": "id", "value": "create-button-x"}, "alternatives": []}
+    ir["elements"]["yes"] = {"preferred": {"strategy": "role", "value": {"role": "button", "name": "Yes"}}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [
+        {"id": "step-005", "action": "click", "element": "search-btn"},
+        {"id": "step-006", "action": "click", "element": "00155707"},
+        {"id": "step-007", "action": "click", "element": "create-button"},
+        {"id": "step-008", "action": "click", "element": "yes"},
+    ]
+    return ir
+
+
+def test_employee_steps_are_retried_with_the_next_row_when_the_application_rejects_the_proposal():
+    test = _test_source(_employee_ir())
+    assert "def _attempt(_skip):" in test and "_problem = _attempt(_tries)" in test and "[IR-RETRY]" in test and "_dismiss_popups(page)" in test
+    block = test.split("def _attempt(_skip):")[1].split("_tries = 0")[0]
+    for step in ("step-005", "step-006", "step-007", "step-008"):
+        assert "# IR-STEP: " + step in block
+    assert "# IR-STEP: step-004" not in block
+    assert "_row = _rows.nth(_skip)" in block and "_attach_documents(page)" in block
+    assert block.index("_attach_documents(page)") < block.index("_wait_for_confirm_or_error(page)") < block.index("# IR-STEP: step-008") + 400
+    assert block.rstrip().endswith("return _creation_problem(page)")
+    assert "_skip = 0" in test.split("def _attempt")[0]
+
+
+def test_source_map_lines_still_point_at_their_steps_after_the_retry_wrapper():
+    import json
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = _employee_ir()
+    out = generate_project(r)
+    test = next(f["content"] for f in out["files"] if f["path"].startswith("tests/test_"))
+    lines = test.split("\n")
+    for sid, entry in out["sourceMap"].items():
+        assert "# IR-STEP: " + sid in lines[entry["line"] - 1], (sid, entry)
+
+
+def test_no_retry_wrapper_without_a_row_pick_and_a_save_click():
+    test = _test_source(_date_ir())
+    assert "def _attempt" not in test and "_skip = 0" in test
+
+
+def test_save_click_attaches_the_sample_document_and_browse_opens_the_file_picker():
+    import copy
+    test = _test_source(_employee_ir())
+    assert "def _sample_document" in test and "import tempfile" in test and "%PDF-1.4" in test
+    assert "# IR-STEP: step-007" in test and test.split("# IR-STEP: step-007")[1].lstrip().split("\n")[1].strip() == "_attach_documents(page)" or "_attach_documents(page)" in test.split("# IR-STEP: step-007")[1].split("# IR-STEP: step-008")[0]
+    ir = copy.deepcopy(IR)
+    ir["elements"]["browse"] = {"description": "Browse", "preferred": {"strategy": "role", "value": {"role": "button", "name": "Browse"}}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [{"id": "step-005", "action": "click", "element": "browse"}]
+    body = _test_source(ir).split("# IR-STEP: step-005")[1]
+    assert "_click_and_choose_file(page, " in body
+
+
+def test_recorded_second_sign_in_is_skipped_when_the_browser_is_already_signed_in():
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["steps"] = [
+        {"id": "step-001", "action": "navigate", "url": "https://qa.example.com/idp/realms/x/protocol/openid-connect/auth?client_id=erp"},
+        {"id": "step-002", "action": "fill", "element": "username", "value": {"source": "parameter", "reference": "username"}},
+        {"id": "step-003", "action": "click", "element": "login"},
+        {"id": "step-004", "action": "navigate", "url": "https://qa.example.com/idp/realms/x/login-actions/authenticate?execution=1"},
+        {"id": "step-005", "action": "fill", "element": "password", "value": {"source": "secret", "reference": "LOGIN_PASSWORD"}},
+        {"id": "step-006", "action": "click", "element": "login"},
+        {"id": "step-007", "action": "navigate", "url": "https://qa.example.com/dashboard"},
+    ]
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    import ast
+    test = next(f["content"] for f in out["files"] if f["path"].startswith("tests/test_"))
+    ast.parse(test)
+    block = test.split("    _settle(page)\n    if _SIGN_IN_URL.search(page.url):")[1].split("    else:")[0]
+    assert "# IR-STEP: step-004" in block and "# IR-STEP: step-006" in block and "# IR-STEP: step-007" not in block and "# IR-STEP: step-002" not in block
+    assert "[IR-SKIP] step-004 to step-006" in test
+    lines = test.split("\n")
+    for sid, entry in out["sourceMap"].items():
+        assert "# IR-STEP: " + sid in lines[entry["line"] - 1], (sid, entry)
