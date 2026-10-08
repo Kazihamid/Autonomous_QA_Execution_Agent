@@ -43,7 +43,21 @@ export default function ScenarioRepository(){
   useEffect(()=>()=>{if(pollRef.current)clearTimeout(pollRef.current)},[]);
 
   const allSelected=items.length>0&&items.every(x=>selected.has(x.id));
-  const selectedIds=useMemo(()=>items.filter(x=>selected.has(x.id)).map(x=>x.id),[items,selected]);
+  // Scenarios are grouped Module -> Feature. The numbers and the "run in order" sequence follow the grouped order shown on screen.
+  type Group={name:string;features:{name:string;items:Scenario[]}[]};
+  const groups=useMemo(()=>{
+    const out:Group[]=[];
+    items.forEach(s=>{
+      const mn=(s.moduleName||"").trim()||"No module";const fn=(s.featureName||"").trim()||"No feature";
+      let m=out.find(x=>x.name.toLowerCase()===mn.toLowerCase());if(!m){m={name:mn,features:[]};out.push(m)}
+      let f=m.features.find(x=>x.name.toLowerCase()===fn.toLowerCase());if(!f){f={name:fn,items:[]};m.features.push(f)}
+      f.items.push(s);
+    });
+    return out;
+  },[items]);
+  const ordered=useMemo(()=>groups.flatMap(m=>m.features.flatMap(f=>f.items)),[groups]);
+  const position=useMemo(()=>{const p:Record<string,number>={};ordered.forEach((x,i)=>{p[x.id]=i+1});return p},[ordered]);
+  const selectedIds=useMemo(()=>ordered.filter(x=>selected.has(x.id)).map(x=>x.id),[ordered,selected]);
   const locatorError=error.includes("UNSUPPORTED_LOCATOR")||error.includes("LOCATOR_REQUIRED");
   const envName=envs.find(x=>x.id===envId)?.name;
   const norm=(v?:string)=>(v||"").trim().replace(/\s+/g," ").toLowerCase();
@@ -53,10 +67,16 @@ export default function ScenarioRepository(){
   function toggle(id:string){setSelected(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n})}
   function toggleAll(){setSelected(allSelected?new Set():new Set(items.map(x=>x.id)))}
 
+  function setGroup(list:Scenario[],on:boolean){setSelected(prev=>{const n=new Set(prev);list.forEach(x=>on?n.add(x.id):n.delete(x.id));return n})}
+
   async function move(id:string,delta:number){
-    const i=items.findIndex(x=>x.id===id);const j=i+delta;
-    if(i<0||j<0||j>=items.length)return;
-    const next=[...items];[next[i],next[j]]=[next[j],next[i]];setItems(next);
+    const feature=groups.flatMap(m=>m.features).find(f=>f.items.some(x=>x.id===id));
+    if(!feature)return;
+    const i=feature.items.findIndex(x=>x.id===id);const j=i+delta;
+    if(j<0||j>=feature.items.length)return;
+    const swapped=[...feature.items];[swapped[i],swapped[j]]=[swapped[j],swapped[i]];
+    const next=groups.flatMap(m=>m.features.flatMap(f=>f===feature?swapped:f.items));
+    setItems(next);
     try{setBusy("reorder");setError("");setItems(await api<Scenario[]>(`${base}/scenarios/order`,{method:"PUT",body:JSON.stringify({scenarioIds:next.map(x=>x.id)})}))}
     catch(e){setError((e as Error).message);await load()}finally{setBusy("")}
   }
@@ -139,34 +159,55 @@ export default function ScenarioRepository(){
           <button className="export-btn" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"}>{busy==="export"?"Exporting…":"Export selected"}</button>
         </div>
       </div>
-      <p className="muted small-note">Scenarios run one after another in the # order shown below (▲▼ to change). The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
+      <p className="muted small-note">Scenarios are grouped by module and feature. They run one after another in the # order shown below (▲▼ change the order inside a feature). The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
     </section>
 
     {job&&<RunPanel job={job}/>}
 
     {items.length===0?<div className="empty">No recorded scenarios yet. Return to an environment and click Record Test.</div>:
-    <section className="card" style={{marginTop:14,overflowX:"auto"}}>
-      <table className="table scenario-table">
-        <thead><tr><th><input type="checkbox" checked={allSelected} onChange={toggleAll} aria-label="Select all scenarios"/></th><th>#</th><th>Module</th><th>Feature</th><th>Scenario</th><th>Status</th><th>Version</th><th>Last run</th><th>Actions</th></tr></thead>
-        <tbody>{items.map((s,idx)=>{
-          const rr=lastStatus[s.id];
-          const live=job?.items.find(x=>x.scenarioId===s.id);
-          return <tr key={s.id}>
-            <td><input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggle(s.id)} aria-label={`Select ${s.name}`}/></td>
-            <td style={{whiteSpace:"nowrap"}}>{idx+1} <button className="secondary compact" onClick={()=>move(s.id,-1)} disabled={idx===0||busy==="reorder"||running} aria-label="Move up">▲</button> <button className="secondary compact" onClick={()=>move(s.id,1)} disabled={idx===items.length-1||busy==="reorder"||running} aria-label="Move down">▼</button></td>
-            <td>{s.moduleName||"—"}</td><td>{s.featureName||"—"}</td>
-            <td><Link className="table-link" href={scenarioHref(s.id)}>{s.name}</Link>{isDup(s)&&<span className="badge warn" style={{marginLeft:8}} title="Another scenario has the same module, feature and name. Delete the extra one.">Duplicate</span>}</td>
-            <td><span className="badge ok">{s.status}</span></td>
-            <td>v{s.currentVersion}</td>
-            <td>{rr?<span className={`badge ${rr.status==="PASSED"?"ok":["QUEUED","SKIPPED"].includes(rr.status)?"":["GENERATING","RUNNING"].includes(rr.status)?"warn":"bad"}`} title={rr.text}>{live&&["GENERATING","RUNNING"].includes(live.status)?<><span className="spin"/> </>:null}{rr.status}</span>:"—"}</td>
-            <td><div className="actions scenario-row-actions">
-              <Link className="button secondary compact" href={scenarioHref(s.id)}>View</Link>
-              <Link className="button secondary compact" href={`${scenarioHref(s.id)}/edit`} title="Change parameters and save as a new scenario">Edit</Link>
-              <button className="compact" onClick={()=>run([s.id],`run-${s.id}`)} disabled={running||!envId} title={envName?`Run on ${envName}`:"Choose an environment first"}>{busy===`run-${s.id}`?"Running…":"Run"}</button>
-              <button className="danger compact" onClick={()=>deleteScenario(s)} disabled={busy===`delete-${s.id}`||running}>{busy===`delete-${s.id}`?"Deleting…":"Delete"}</button>
-            </div></td>
-          </tr>})}</tbody>
-      </table>
-    </section>}
+    groups.map(m=>{
+      const modItems=m.features.flatMap(f=>f.items);
+      const modAll=modItems.every(x=>selected.has(x.id));
+      return <section className="card module-group" key={m.name} style={{marginTop:14}}>
+        <details open>
+          <summary className="group-head">
+            <input type="checkbox" checked={modAll} onClick={e=>e.stopPropagation()} onChange={()=>setGroup(modItems,!modAll)} aria-label={`Select every scenario in ${m.name}`}/>
+            <h2>{m.name}</h2>
+            <span className="badge">{m.features.length} feature{m.features.length===1?"":"s"}</span>
+            <span className="badge">{modItems.length} scenario{modItems.length===1?"":"s"}</span>
+          </summary>
+          {m.features.map(f=>{
+            const featAll=f.items.every(x=>selected.has(x.id));
+            return <div className="feature-group" key={f.name}>
+              <div className="feature-head">
+                <input type="checkbox" checked={featAll} onChange={()=>setGroup(f.items,!featAll)} aria-label={`Select every scenario in ${f.name}`}/>
+                <h3>{f.name}</h3>
+                <span className="badge">{f.items.length}</span>
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table className="table scenario-table">
+                  <thead><tr><th></th><th>#</th><th>Scenario</th><th>Status</th><th>Version</th><th>Last run</th><th>Actions</th></tr></thead>
+                  <tbody>{f.items.map((s,idx)=>{
+                    const rr=lastStatus[s.id];
+                    const live=job?.items.find(x=>x.scenarioId===s.id);
+                    return <tr key={s.id}>
+                      <td><input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggle(s.id)} aria-label={`Select ${s.name}`}/></td>
+                      <td style={{whiteSpace:"nowrap"}}>{position[s.id]} <button className="secondary compact" onClick={()=>move(s.id,-1)} disabled={idx===0||busy==="reorder"||running} aria-label="Move up">▲</button> <button className="secondary compact" onClick={()=>move(s.id,1)} disabled={idx===f.items.length-1||busy==="reorder"||running} aria-label="Move down">▼</button></td>
+                      <td><Link className="table-link" href={scenarioHref(s.id)}>{s.name}</Link>{isDup(s)&&<span className="badge warn" style={{marginLeft:8}} title="Another scenario has the same module, feature and name. Delete the extra one.">Duplicate</span>}</td>
+                      <td><span className="badge ok">{s.status}</span></td>
+                      <td>v{s.currentVersion}</td>
+                      <td>{rr?<span className={`badge ${rr.status==="PASSED"?"ok":["QUEUED","SKIPPED"].includes(rr.status)?"":["GENERATING","RUNNING"].includes(rr.status)?"warn":"bad"}`} title={rr.text}>{live&&["GENERATING","RUNNING"].includes(live.status)?<><span className="spin"/> </>:null}{rr.status}</span>:"—"}</td>
+                      <td><div className="actions scenario-row-actions">
+                        <Link className="button secondary compact" href={scenarioHref(s.id)}>View</Link>
+                        <Link className="button secondary compact" href={`${scenarioHref(s.id)}/edit`} title="Change parameters and save as a new scenario">Edit</Link>
+                        <button className="compact" onClick={()=>run([s.id],`run-${s.id}`)} disabled={running||!envId} title={envName?`Run on ${envName}`:"Choose an environment first"}>{busy===`run-${s.id}`?"Running…":"Run"}</button>
+                        <button className="danger compact" onClick={()=>deleteScenario(s)} disabled={busy===`delete-${s.id}`||running}>{busy===`delete-${s.id}`?"Deleting…":"Delete"}</button>
+                      </div></td>
+                    </tr>})}</tbody>
+                </table>
+              </div>
+            </div>})}
+        </details>
+      </section>})}
   </AppShell>;
 }
