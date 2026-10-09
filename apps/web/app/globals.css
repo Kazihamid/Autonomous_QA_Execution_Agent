@@ -160,3 +160,11 @@ button.tint-blue:disabled { background:#dcebfa; }
 .scenario-toolbar select { min-width:200px; max-width:260px; }
 @media (min-width:1350px){ .toolbar-row { flex-wrap:nowrap; align-items:flex-end; } .toolbar-group { flex-wrap:nowrap; } .toolbar-group.run { flex:1 1 auto; } }
 @media (max-width:1349px){ .toolbar-group.export { margin-left:0; } }
+
+/* Recovery & Backup: each list has a light background so it stands out from the page */
+.recovery-panel { background:#f7fafd; }
+.recovery-list { border-radius:8px; padding:6px 8px; margin-top:6px; }
+.recovery-list.deleted { background:#fdeeed; border:1px solid #f5c2bd; }
+.recovery-list.recoverable { background:#e9f2fb; border:1px solid #b9d3ee; }
+.recovery-list.versions { background:#eef7ee; border:1px solid #c3e0c8; }
+.recovery-list table, .recovery-list th, .recovery-list td { background:transparent; }

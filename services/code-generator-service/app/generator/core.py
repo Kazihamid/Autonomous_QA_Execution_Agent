@@ -336,6 +336,50 @@ def _settle(page, timeout=25000):
         pass
 
 
+def _open_page(page, url):
+    # Opens a page. When it has not finished loading after 30 seconds (a script or style it needs may be unreachable from this machine),
+    # say what is still loading and carry on with what has arrived, instead of stopping at the first step.
+    waiting = {}
+
+    def started(request):
+        waiting[id(request)] = request.url
+
+    def ended(request):
+        waiting.pop(id(request), None)
+
+    page.on("request", started)
+    page.on("requestfinished", ended)
+    page.on("requestfailed", ended)
+    try:
+        try:
+            return page.goto(url, wait_until="domcontentloaded")
+        except Exception as ex:
+            if "Timeout" not in type(ex).__name__ and "Timeout" not in str(ex):
+                raise
+            slow = sorted(set(waiting.values()))[:6]
+            print("[IR-WARN] the page did not finish loading within 30 seconds; continuing with what has loaded. Still loading: " + (" | ".join(u[:150] for u in slow) or "nothing listed (the page itself did not answer)"), flush=True)
+            return None
+    finally:
+        for name, handler in (("request", started), ("requestfinished", ended), ("requestfailed", ended)):
+            try:
+                page.remove_listener(name, handler)
+            except Exception:
+                pass
+
+
+def _join_url(base_url, rel):
+    # The environment address may be a full page address (https://host/admin/login). The recorded path then already starts with
+    # the same first folder (/admin/...), so use the site address in front of it instead of repeating the folder.
+    base = urlsplit(base_url)
+    parts = [x for x in base.path.split("/") if x]
+    if parts:
+        first = "/" + parts[0]
+        path = urlsplit(rel).path
+        if path == first or path.startswith(first + "/"):
+            return base.scheme + "://" + base.netloc + rel
+    return base_url.rstrip("/") + rel
+
+
 def _stay_on_admin(page, requested_url):
     # Some admin portals answer an /admin/ address with their /auth/ landing page (for example a page that only offers SSO).
     # When an /admin/ page was requested and the browser ended on the matching /auth/ page, open the /admin/ page instead.
@@ -811,7 +855,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files={}
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
-    lines=['import base64','import datetime','import os','import pytest','import tempfile','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"','    _skip = 0']
+    lines=['import base64','import datetime','import os','import pytest','import tempfile','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = _open_page(page, url)','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"','    _skip = 0']
     _i=lines.index('def _goto_with_retry(page, url):'); _secret_names={str((x.get('value') or {}).get('reference')) for x in ir['steps'] if (x.get('value') or {}).get('source')=='secret' and (x.get('value') or {}).get('reference')}
     _recorded={str(k):('' if v.get('default') is None else str(v.get('default'))) for k,v in params.items() if isinstance(v,dict) and str(k) not in _secret_names}
     lines[_i:_i]=_SETTLE_HELPER.split('\n')+_FLOW_HELPER.split('\n')+_SETTING_HELPER.split('\n')+[f'_SCENARIO = {_json(module.upper())}',f'_DEFAULTS = {json.dumps(_recorded,ensure_ascii=False)}','','']
@@ -873,12 +917,12 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 origin=_origin(step.get('url'))
                 prefix_expr=f'_rebase({_json(prefix)}, {_json(origin)}, base_url)' if _embeds_origin(prefix,origin) else _json(prefix)
                 lines.append(f'    _state = base64.b64encode(f"time:{{int(time.time()*1000)}}{suffix}".encode()).decode()')
-                lines.append(f'    _goto_with_retry(page, base_url.rstrip("/") + {prefix_expr} + "state=" + quote(_state, safe=""))')
+                lines.append(f'    _goto_with_retry(page, _join_url(base_url, {prefix_expr}) + "state=" + quote(_state, safe=""))')
             else:
                 rel=_relative_url(step.get('url'))
                 origin=_origin(step.get('url'))
                 rel_expr=f'_rebase({_json(rel)}, {_json(origin)}, base_url)' if _embeds_origin(rel,origin) else _json(rel)
-                lines.append(f'    _target = base_url.rstrip("/") + {rel_expr}')
+                lines.append(f'    _target = _join_url(base_url, {rel_expr})')
                 lines.append('    _goto_with_retry(page, _target)')
                 lines.append('    _stay_on_admin(page, _target)')
             lines.append('    page.wait_for_load_state("domcontentloaded")')
@@ -990,7 +1034,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                         rel=_relative_url(navigated_to)
                         _warn=f"[IR-WARN] {sid}: could not click the recorded target ({key}); opened {rel} instead, so the action that click performs did not happen."
                         lines.append(f'        print({_json(_warn)}, flush=True)')
-                        lines.append(f'        page.goto(base_url.rstrip("/") + {_json(rel)})')
+                        lines.append(f'        page.goto(_join_url(base_url, {_json(rel)}))')
                     else:
                         lines.append(f'        {loc}.first.dispatch_event("click", timeout=3000)')
                     lines.append('    _quiet(page)')

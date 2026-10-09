@@ -302,10 +302,9 @@ public class RecorderService {
         guard.requireWrite(workspaceId); applications.entity(workspaceId, applicationId);
         TestScenarioEntity scenario = scenarios.findByIdAndWorkspaceIdAndApplicationId(scenarioId, workspaceId, applicationId)
             .orElseThrow(() -> new ResourceNotFoundException("Scenario not found."));
-        implementations.deleteByScenarioId(scenarioId);
-        versions.deleteByScenarioId(scenarioId);
-        scenarios.delete(scenario);
-        audit.success(workspaceId, "SCENARIO_DELETED", "TEST_SCENARIO", scenarioId, Map.of("name", scenario.getName()));
+        // Soft delete: the scenario, its versions and generated code stay in the database and can be restored from "Recently deleted".
+        scenarios.softDelete(scenarioId, currentUser.currentUser().getId());
+        audit.success(workspaceId, "SCENARIO_DELETED", "TEST_SCENARIO", scenarioId, Map.of("name", scenario.getName(), "recoverable", true));
     }
 
     @Transactional(readOnly=true)

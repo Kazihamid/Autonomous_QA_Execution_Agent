@@ -31,3 +31,4 @@ playwright-report/
 # Keep database migrations tracked despite the *.sql rule above
 !db/migrations/*.sql
 !services/control-plane/src/main/resources/db/migration/*.sql
+scenario-backups/

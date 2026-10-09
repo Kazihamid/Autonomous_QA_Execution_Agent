@@ -18,7 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/workspaces/{workspaceId}/applications/{applicationId}")
 public class RecorderController {
     private final RecorderService service;
-    public RecorderController(RecorderService service) { this.service=service; }
+    private final ScenarioRecoveryService recovery;
+    public RecorderController(RecorderService service, ScenarioRecoveryService recovery) { this.service=service; this.recovery=recovery; }
 
     @PostMapping("/environments/{environmentId}/recording-sessions") @ResponseStatus(HttpStatus.CREATED)
     public RecorderDtos.SessionResponse create(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID environmentId,
@@ -81,7 +82,9 @@ public class RecorderController {
 
     @PostMapping("/recording-sessions/{sessionId}/scenarios") @ResponseStatus(HttpStatus.CREATED)
     public RecorderDtos.ScenarioResponse saveScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID sessionId) {
-        return service.saveScenario(workspaceId, applicationId, sessionId);
+        RecorderDtos.ScenarioResponse result = service.saveScenario(workspaceId, applicationId, sessionId);
+        recovery.snapshotQuietly(workspaceId, applicationId);
+        return result;
     }
 
     @GetMapping("/scenarios")
@@ -97,7 +100,9 @@ public class RecorderController {
     @PostMapping("/scenarios/{scenarioId}/clone") @ResponseStatus(HttpStatus.CREATED)
     public RecorderDtos.ScenarioResponse cloneScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId,
             @Valid @RequestBody RecorderDtos.CloneScenarioRequest request) {
-        return service.cloneScenario(workspaceId, applicationId, scenarioId, request);
+        RecorderDtos.ScenarioResponse result = service.cloneScenario(workspaceId, applicationId, scenarioId, request);
+        recovery.snapshotQuietly(workspaceId, applicationId);
+        return result;
     }
 
     @GetMapping("/scenarios/{scenarioId}")
@@ -108,11 +113,14 @@ public class RecorderController {
     @PutMapping("/scenarios/{scenarioId}")
     public RecorderDtos.ScenarioResponse updateScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId,
             @Valid @RequestBody RecorderDtos.UpdateScenarioRequest request) {
-        return service.updateScenario(workspaceId, applicationId, scenarioId, request);
+        RecorderDtos.ScenarioResponse result = service.updateScenario(workspaceId, applicationId, scenarioId, request);
+        recovery.snapshotQuietly(workspaceId, applicationId);
+        return result;
     }
 
     @DeleteMapping("/scenarios/{scenarioId}") @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteScenario(@PathVariable UUID workspaceId, @PathVariable UUID applicationId, @PathVariable UUID scenarioId) {
         service.deleteScenario(workspaceId, applicationId, scenarioId);
+        recovery.snapshotQuietly(workspaceId, applicationId);
     }
 }

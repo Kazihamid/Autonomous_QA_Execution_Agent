@@ -199,7 +199,7 @@ def test_click_fallback_to_navigation_is_reported_in_the_run_output():
     test = next(x["content"] for x in out["files"] if x["path"].startswith("tests/test_"))
     ast.parse(test)
     assert "[IR-WARN] step-004" in test and "did not happen" in test
-    assert test.index("[IR-WARN] step-004") < test.index('page.goto(base_url.rstrip("/") + "/done")')
+    assert test.index("[IR-WARN] step-004") < test.index('page.goto(_join_url(base_url, "/done"))')
 
 
 def _date_ir(extra_step=None, yes_role="button"):
@@ -234,9 +234,9 @@ def test_click_on_an_empty_date_field_sets_a_future_date():
 
 def test_missing_button_fails_instead_of_opening_another_page_but_links_still_fall_back():
     button = _test_source(_date_ir(yes_role="button")).split("# IR-STEP: step-006")[1]
-    assert 'page.goto(base_url.rstrip("/") + "/list")' not in button and "dispatch_event" in button
+    assert 'page.goto(_join_url(base_url, "/list"))' not in button and "dispatch_event" in button
     link = _test_source(_date_ir(yes_role="link")).split("# IR-STEP: step-006")[1]
-    assert 'page.goto(base_url.rstrip("/") + "/list")' in link
+    assert 'page.goto(_join_url(base_url, "/list"))' in link
 
 
 def _employee_ir(with_navigate=False):
@@ -432,3 +432,12 @@ def test_generated_test_checks_that_create_really_worked_and_selects_radios_reli
     for name in ("def _click(", "def _choose(", "def _reapply_choices(", "def _unfilled_required(", "def _creation_problem("):
         assert name in test
     assert '_click(page, ' in test
+
+
+def test_environment_address_that_is_a_full_page_address_does_not_double_the_path():
+    ns = {}; exec(__import__("app.generator.core", fromlist=["x"])._SETTLE_HELPER, ns)
+    join = ns["_join_url"]
+    assert join("https://h.example/admin/login", "/admin/login") == "https://h.example/admin/login"
+    assert join("https://h.example/admin/login", "/admin/dashboard?a=1") == "https://h.example/admin/dashboard?a=1"
+    assert join("https://h.example/", "/admin/login") == "https://h.example/admin/login"
+    assert join("https://h.example/app", "/login") == "https://h.example/app/login"

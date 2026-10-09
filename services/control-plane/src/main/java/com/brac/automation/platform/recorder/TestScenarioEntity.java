@@ -9,6 +9,8 @@ import java.util.UUID;
 
 @Entity
 @Table(schema="core", name="test_scenario")
+// A deleted scenario stays in the table (status DELETED) so it can be restored; every normal query ignores it.
+@org.hibernate.annotations.SQLRestriction("status <> 'DELETED'")
 public class TestScenarioEntity {
     @Id private UUID id;
     @Column(name="workspace_id", nullable=false) private UUID workspaceId;

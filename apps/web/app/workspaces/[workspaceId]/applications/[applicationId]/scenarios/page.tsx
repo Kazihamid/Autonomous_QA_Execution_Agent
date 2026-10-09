@@ -1,6 +1,7 @@
 "use client";
 import AppShell from "@/components/AppShell";
 import RunPanel,{RunJob} from "@/components/RunPanel";
+import ScenarioRecovery from "@/components/ScenarioRecovery";
 import {api,apiBlob} from "@/lib/api";
 import Link from "next/link";
 import {useParams} from "next/navigation";
@@ -9,7 +10,14 @@ import {useCallback,useEffect,useMemo,useRef,useState} from "react";
 type Scenario={id:string;moduleName?:string;featureName?:string;name:string;status:string;currentVersion:number;executionOrder?:number;createdAt:string};
 type Environment={id:string;name:string;baseUrl:string;allowExecution:boolean;status:string};
 
-export default function ScenarioRepository(){
+// The page is keyed by the application, so moving to another application starts with a clean page: its own environments,
+// scenarios and run results, never the ones left over from the application that was open before.
+export default function ScenarioRepositoryForApplication(){
+  const {applicationId}=useParams<{applicationId:string}>();
+  return <ScenarioRepository key={applicationId}/>;
+}
+
+function ScenarioRepository(){
   const {workspaceId,applicationId}=useParams<{workspaceId:string;applicationId:string}>();
   const base=`/api/v1/workspaces/${workspaceId}/applications/${applicationId}`;
   const [items,setItems]=useState<Scenario[]>([]);
@@ -117,12 +125,12 @@ export default function ScenarioRepository(){
   }
 
   async function deleteScenario(s:Scenario){
-    if(!window.confirm(`Delete scenario "${s.name}" permanently? This will also remove its generated implementations.`))return;
+    if(!window.confirm(`Delete scenario "${s.name}"? It is moved to "Recently deleted" and can be restored from Recovery & Backup below.`))return;
     try{
       setBusy(`delete-${s.id}`);setError("");setMessage("");
       await api(`${base}/scenarios/${s.id}`,{method:"DELETE"});
       setSelected(prev=>{const n=new Set(prev);n.delete(s.id);return n});
-      setMessage(`Scenario "${s.name}" deleted.`);await load();
+      setMessage(`Scenario "${s.name}" moved to Recently deleted. You can restore it from Recovery & Backup below.`);await load();
     }catch(e){setError((e as Error).message)}finally{setBusy("")}
   }
 
@@ -209,5 +217,7 @@ export default function ScenarioRepository(){
             </div>})}
         </details>
       </section>})}
+
+    <ScenarioRecovery base={base} scenarios={items} onChanged={load}/>
   </AppShell>;
 }
