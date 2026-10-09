@@ -85,7 +85,9 @@ public class ScenarioActionsService {
                                 int p = line.indexOf('=');
                                 String key = line.substring(0, p).trim();
                                 String value = line.substring(p + 1);
-                                envValues.putIfAbsent(key, value);
+                                String previous = envValues.get(key);
+                                // A value recorded by one scenario must not be hidden by a blank entry from another.
+                                if (previous == null || (previous.isBlank() && !value.isBlank())) envValues.put(key, value);
                             }
                             continue;
                         }
@@ -122,6 +124,18 @@ public class ScenarioActionsService {
                 StringBuilder env = new StringBuilder();
                 envValues.forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
                 projectFiles.put(".env.example", env.toString());
+                if ("PLAYWRIGHT_PYTEST".equals(target)) {
+                    // A ready settings file: the tests read it by themselves, so nothing has to be typed into the terminal.
+                    StringBuilder ready = new StringBuilder("# Settings for running these tests on your computer.\n")
+                        .append("# Type the missing values (passwords) after the = sign, then save the file.\n")
+                        .append("# BASE_URL is the website the tests run on. Change it to use another environment.\n")
+                        .append("# This file holds real passwords: keep it private and do not commit it.\n\n");
+                    envValues.forEach((k, v) -> {
+                        if (v.isBlank()) ready.append("# Type the value for ").append(k).append(" on the next line\n");
+                        ready.append(k).append('=').append(v).append('\n');
+                    });
+                    projectFiles.put(".env", ready.toString());
+                }
             }
             if ("SELENIUM_TESTNG".equals(target) && !testNgClasses.isEmpty()) {
                 StringBuilder suite = new StringBuilder("<!DOCTYPE suite SYSTEM \"https://testng.org/testng-1.0.dtd\">\n<suite name=\"Combined Automation\"><test name=\"Selected Scenarios\"><classes>\n");
@@ -130,11 +144,19 @@ public class ScenarioActionsService {
                 projectFiles.put("testng.xml", suite.toString());
             }
 
-            String runCommand = "PLAYWRIGHT_PYTEST".equals(target) ? "py -m pytest" : "mvn test";
+            String runInstructions = "PLAYWRIGHT_PYTEST".equals(target)
+                ? "## Run it\n\n" +
+                  "1. Open this folder in VS Code (File > Open Folder).\n" +
+                  "2. Open the `.env` file and type the missing values (passwords) after the = sign. Save it.\n" +
+                  "3. Double-click `RUN_TESTS.bat` (Windows) or run `./run_tests.sh` (Mac or Linux).\n\n" +
+                  "The tests read `.env` by themselves, so nothing has to be typed into the terminal.\n" +
+                  "To use another environment change the `BASE_URL` line; to run without the browser window set `HEADLESS=true`.\n" +
+                  "`.env` holds real passwords: do not share it or commit it.\n\n"
+                : "Run: mvn test\n\n";
             projectFiles.put("README.md",
                 "# Combined Autonomous QA Execution Agent Project\n\n" +
                 "This package contains all successfully generated selected scenarios in one runnable project.\n\n" +
-                "Run: " + runCommand + "\n\n" +
+                runInstructions +
                 "Scenario-specific Automation IR and source maps are under scenarios/.\n" +
                 "Check bulk-manifest.json for exported or skipped scenarios.\n");
 

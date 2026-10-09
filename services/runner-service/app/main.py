@@ -156,7 +156,7 @@ def run(request: RunRequest):
                     stderr=(
                         "Missing runtime environment variable(s): "
                         + ", ".join(missing)
-                        + ". Add one of the names below to .env.runtime; no restart is needed.\n" + "\n".join(secret_notes)
+                        + ". Add one of the names below to the .env file in the project folder; no restart is needed.\n" + "\n".join(secret_notes)
                     ),
                 )
 
@@ -281,7 +281,7 @@ def _execute_async(rec: dict, request: RunRequest) -> None:
                 missing = [key for key in required if not env.get(key)]
                 if missing:
                     msg = ("Missing runtime environment variable(s): " + ", ".join(missing)
-                           + ". Add one of the names below to .env.runtime; no restart is needed.\n" + "\n".join(secret_notes))
+                           + ". Add one of the names below to the .env file in the project folder; no restart is needed.\n" + "\n".join(secret_notes))
                     _append(rec, msg + "\n")
                     _finish(rec, "ERROR", None, msg)
                     return

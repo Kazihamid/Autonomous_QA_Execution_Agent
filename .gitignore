@@ -16,7 +16,6 @@ runtime-artifacts/
 *.pyc
 .env.*
 !.env.example
-!.env.runtime.example
 *.tsbuildinfo
 
 # Local databases / exports / test artifacts

@@ -47,3 +47,9 @@ def test_secrets_file_is_reread_each_time(tmp_path, monkeypatch):
     assert rs.load_source(str(f))["SECRET_PASSWORD_ENV27"] == "one"
     f.write_text("SECRET_PASSWORD_ENV27='two'\n", encoding="utf-8")
     assert rs.load_source(str(f))["SECRET_PASSWORD_ENV27"] == "two"
+
+
+def test_secret_named_with_the_user_finds_the_per_environment_line():
+    src = {"SECRET_PASSWORD_ERPSTAGING_153872": "x"}
+    value, used = rs.resolve("SECRET_PASSWORD_153872", "https://erpstaging.brac.net/", {"username": "153872"}, src)
+    assert value == "x" and used == "SECRET_PASSWORD_ERPSTAGING_153872"

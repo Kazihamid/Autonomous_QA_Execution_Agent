@@ -25,7 +25,7 @@ def test_playwright_is_deterministic_and_secret_safe():
     source='\n'.join(x['content'] for x in a['files'] if x['path'] not in {'automation-ir.json','.env.example'})
     env=next(x['content'] for x in a['files'] if x['path']=='.env.example')
     assert 'LOGIN_PASSWORD' in source and 'qa.example.com' not in source
-    assert 'BASE_URL=https://qa.example.com' in env and 'LOGIN_PASSWORD=' in env
+    assert 'BASE_URL=https://qa.example.com' in env and 'LOGIN_PASSWORD_QA_USER=' in env
     assert len(a['sourceMap'])==4
 
 def test_selenium_is_deterministic_and_traceable():
@@ -318,3 +318,111 @@ def test_recorded_second_sign_in_is_skipped_when_the_browser_is_already_signed_i
     lines = test.split("\n")
     for sid, entry in out["sourceMap"].items():
         assert "# IR-STEP: " + sid in lines[entry["line"] - 1], (sid, entry)
+
+
+def test_python_project_reads_dot_env_and_ships_one_click_run_scripts():
+    r = req("PLAYWRIGHT_PYTEST"); out = generate_project(r)
+    files = {f["path"]: f["content"] for f in out["files"]}
+    conftest = files["tests/conftest.py"]
+    assert '_ROOT / ".env"' in conftest and "_load_env_file()" in conftest
+    import ast; ast.parse(conftest)
+    assert "RUN_TESTS.bat" in files and "-m pytest -s" in files["RUN_TESTS.bat"] and "copy \".env.example\" \".env\"" in files["RUN_TESTS.bat"]
+    assert "run_tests.sh" in files and "RUN_TESTS.bat" in files["README.md"] and "VS Code" in files["README.md"]
+    example = files[".env.example"]
+    assert "HEADLESS=false" in example
+    assert "username__USER_LOGIN=qa-user" in example  # the recorded user name belongs to this scenario only
+    assert "LOGIN_PASSWORD_QA_USER=\n" in example and "\nusername=" not in example  # one password line per user; no shared user name
+    test = next(files[p] for p in files if p.startswith("tests/test_"))
+    assert '_setting("username")' in test and '_setting("LOGIN_PASSWORD", True)' in test and "os.environ[" not in test.split("def test_user_login(")[1]
+    assert '_SCENARIO = "USER_LOGIN"' in test and '"username": "qa-user"' in test
+
+
+def _setting_namespace(scenario, defaults, env):
+    import os, re, pytest
+    from urllib.parse import urlsplit
+    from app.generator.core import _SETTING_HELPER
+    ns = {"os": type("O", (), {"environ": env, "path": os.path})(), "re": re, "pytest": pytest, "urlsplit": urlsplit, "_SCENARIO": scenario, "_DEFAULTS": defaults}
+    exec(_SETTING_HELPER, ns)
+    return ns
+
+
+def test_each_scenario_uses_its_own_user_and_that_users_password():
+    import pytest
+    env = {"BASE_URL": "https://erpstaging.brac.net/", "SECRET_PASSWORD_153872": "pw-erp", "SECRET_PASSWORD_KAZI": "pw-kazi", "SECRET_PASSWORD": "pw-any"}
+    sep = _setting_namespace("VALIDATE_NEW_SEPARATION_PROPOSAL", {"username": "153872"}, env)
+    login = _setting_namespace("VALIDATE_USER_LOGIN", {"username": "kazi"}, env)
+    assert sep["_setting"]("username") == "153872" and login["_setting"]("username") == "kazi"
+    assert sep["_setting"]("SECRET_PASSWORD", True) == "pw-erp" and login["_setting"]("SECRET_PASSWORD", True) == "pw-kazi"
+    env["SECRET_PASSWORD_ERPSTAGING_153872"] = "pw-env-user"
+    assert sep["_setting"]("SECRET_PASSWORD", True) == "pw-env-user"
+    env["SECRET_PASSWORD__VALIDATE_NEW_SEPARATION_PROPOSAL"] = "pw-scenario"
+    assert sep["_setting"]("SECRET_PASSWORD", True) == "pw-scenario" and login["_setting"]("SECRET_PASSWORD", True) == "pw-kazi"
+    env["username__VALIDATE_NEW_SEPARATION_PROPOSAL"] = "999"
+    assert sep["_setting"]("username") == "999"
+
+
+def test_a_missing_password_stops_with_the_lines_to_add():
+    import pytest
+    ns = _setting_namespace("VALIDATE_USER_LOGIN", {"username": "kazi"}, {"BASE_URL": "https://erpstaging.brac.net/"})
+    with pytest.raises(BaseException) as err:
+        ns["_setting"]("SECRET_PASSWORD", True)
+    text = str(err.value)
+    assert "SECRET_PASSWORD_ERPSTAGING_KAZI=" in text and "SECRET_PASSWORD=" in text and ".env" in text
+
+
+def test_exported_conftest_loads_dot_env_with_quotes_and_hashes(tmp_path):
+    import subprocess, sys, textwrap
+    r = req("PLAYWRIGHT_PYTEST"); out = generate_project(r)
+    for f in out["files"]:
+        target = tmp_path / f["path"]; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(f["content"], encoding="utf-8")
+    (tmp_path / "tests" / "test_probe.py").write_text(textwrap.dedent("""
+        import os
+        def test_values():
+            assert os.environ["MY_USER"] == "from-dot-env"
+            assert os.environ["MY_PASSWORD"] == "s3cret #1"
+    """), encoding="utf-8")
+    (tmp_path / ".env").write_text("MY_USER=from-dot-env\nMY_PASSWORD='s3cret #1'\n", encoding="utf-8")
+    env = {k: v for k, v in __import__("os").environ.items() if k not in ("MY_USER", "MY_PASSWORD")}
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/test_probe.py", "-p", "no:cacheprovider"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_exported_conftest_reads_special_characters_without_quotes(tmp_path):
+    import subprocess, sys, textwrap
+    r = req("PLAYWRIGHT_PYTEST"); out = generate_project(r)
+    for f in out["files"]:
+        target = tmp_path / f["path"]; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(f["content"], encoding="utf-8")
+    (tmp_path / "tests" / "test_probe.py").write_text(textwrap.dedent("""
+        import os
+        def test_values():
+            assert os.environ["PW1"] == "pa$$ w#rd !x"
+            assert os.environ["PW2"] == "a=b #c $HOME"
+            assert os.environ["PW3"] == "plain"
+    """), encoding="utf-8")
+    (tmp_path / ".env").write_text("# comment\nPW1=pa$$ w#rd !x\nPW2=a=b #c $HOME\nPW3='plain'\n", encoding="utf-8")
+    env = {k: v for k, v in __import__("os").environ.items() if k not in ("PW1", "PW2", "PW3")}
+    run = subprocess.run([sys.executable, "-m", "pytest", "-q", "tests/test_probe.py", "-p", "no:cacheprovider"], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_generated_test_waits_for_dropdown_options_and_paces_entries():
+    r = req("PLAYWRIGHT_PYTEST"); test = _test_source(r["automationIr"])
+    assert "def _pick(" in test and "def _quiet(" in test and "_quiet(page)" in test
+    conftest = [f for f in generate_project(r)["files"] if f["path"] == "tests/conftest.py"][0]["content"]
+    assert "slow_mo" in conftest and "SLOW_MO" in conftest
+
+
+def test_sign_in_failure_message_names_the_user_and_the_password_line_but_not_the_password():
+    env = {"BASE_URL": "https://erpstaging.brac.net/", "SECRET_PASSWORD_153872": "pw-secret-value"}
+    ns = _setting_namespace("VALIDATE_USER_LOGIN", {"username": "153872"}, env)
+    assert ns["_setting"]("SECRET_PASSWORD", True) == "pw-secret-value"
+    assert ns["_USED"] == {"user": "153872", "password": "SECRET_PASSWORD_153872"}
+    r = req("PLAYWRIGHT_PYTEST"); test = _test_source(r["automationIr"])
+    assert "Password taken from: " in test and "User name used: " in test and ".env.runtime" not in test
+
+
+def test_generated_test_checks_that_create_really_worked_and_selects_radios_reliably():
+    r = req("PLAYWRIGHT_PYTEST"); test = _test_source(r["automationIr"])
+    for name in ("def _click(", "def _choose(", "def _reapply_choices(", "def _unfilled_required(", "def _creation_problem("):
+        assert name in test
+    assert '_click(page, ' in test

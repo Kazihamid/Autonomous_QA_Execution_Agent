@@ -323,7 +323,13 @@ def _settle(page, timeout=25000):
         try:
             page.wait_for_url(lambda u: not _SIGN_IN_URL.search(u), timeout=timeout)
         except Exception:
-            raise RuntimeError("Sign-in did not complete: the browser is still on the sign-in page after the credentials were submitted. Check the user name, and that the password secret for this environment is set in .env.runtime.")
+            said = ""
+            try:
+                said = " ".join(page.inner_text("body").split())[:200]
+            except Exception:
+                pass
+            used = globals().get("_USED", {})
+            raise RuntimeError("Sign-in did not complete: the browser is still on the sign-in page. The page says: '" + said + "'. User name used: " + str(used.get("user", "unknown")) + ". Password taken from: " + str(used.get("password", "unknown")) + ". Check the user name and that this password line in the .env file is filled in correctly (the password itself is never shown).")
     try:
         page.wait_for_load_state("networkidle", timeout=timeout)
     except Exception:
@@ -355,6 +361,128 @@ def _stay_on_admin(page, requested_url):
         print("[runner] now on " + urlsplit(page.url).path, flush=True)
 
 
+def _pace_ms():
+    raw = os.environ.get("STEP_DELAY_MS", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 300 if os.environ.get("HEADLESS", "true").lower() == "false" else 100
+
+
+def _quiet(page):
+    # After an entry, let the page finish any refresh it triggers (dependent lists, auto-fill, validation) before the next step.
+    try:
+        page.wait_for_load_state("networkidle", timeout=4000)
+    except Exception:
+        pass
+    page.wait_for_timeout(_pace_ms())
+
+
+def _pick(page, loc, value, timeout=15000):
+    # Choose a drop-down entry only once the list is enabled and the wanted entry is in it (lists that load after another field).
+    loc.wait_for(state="visible", timeout=timeout)
+    waited = 0
+    while waited < timeout:
+        try:
+            if loc.is_enabled():
+                options = loc.evaluate("e => Array.from(e.options).map(o => [o.value, o.text.trim()])")
+                if any(value == v or value == t for v, t in options):
+                    break
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
+        waited += 250
+    page.wait_for_timeout(_pace_ms())
+    loc.select_option(value)
+    _quiet(page)
+
+
+'''
+
+_CONFTEST_HEAD = r'''import os
+import re
+from pathlib import Path
+
+import pytest
+from playwright.sync_api import sync_playwright
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_env_file():
+    # Reads the .env file in the project folder, so BASE_URL, user names and passwords do not have to be typed into the terminal.
+    # Everything after the first = is the value exactly as typed: # $ spaces and quotes inside a password need no special handling.
+    path = _ROOT / ".env"
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8-sig").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        if key and value and not os.environ.get(key):
+            os.environ[key] = value
+
+
+_load_env_file()
+
+'''
+
+_SETTING_HELPER = r'''_SETTING_USER_NAMES = ("username", "userName", "user", "userId", "userid", "login", "loginId")
+_USED = {}
+
+
+def _tag(value):
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_").upper()
+
+
+def _missing(name, lines):
+    pytest.fail("A value is missing: " + name + ". Open the .env file in the project folder and add one of these lines (type the value after the = sign), then run again:\n  " + "\n  ".join(line + "=" for line in lines), pytrace=False)
+
+
+def _setting(name, secret=False):
+    # Finds the value for a test-data name or a password the same way the platform does, most specific first.
+    # Scenario-specific  NAME__SCENARIO ; then, for passwords, NAME_<ENV>_<USER>, NAME_<ENV>, NAME_<USER> ; then plain NAME ; then the recorded value.
+    scoped = name + "__" + _SCENARIO
+    if os.environ.get(scoped):
+        if name in _SETTING_USER_NAMES:
+            _USED["user"] = os.environ[scoped]
+        elif secret:
+            _USED["password"] = scoped
+        return os.environ[scoped]
+    if not secret:
+        value = os.environ.get(name) or _DEFAULTS.get(name)
+        if value is None:
+            _missing(name, [scoped, name])
+        if name in _SETTING_USER_NAMES:
+            _USED["user"] = value
+        return value
+    host = (urlsplit(os.environ.get("BASE_URL", "")).hostname or "").split(".")[0]
+    env_tag = _tag(host)
+    user_tag = ""
+    for user_name in _SETTING_USER_NAMES:
+        if os.environ.get(user_name + "__" + _SCENARIO) or os.environ.get(user_name) or user_name in _DEFAULTS:
+            user_tag = _tag(_setting(user_name))
+            break
+    candidates = []
+    if env_tag and user_tag:
+        candidates.append(name + "_" + env_tag + "_" + user_tag)
+    if env_tag:
+        candidates.append(name + "_" + env_tag)
+    if user_tag:
+        candidates.append(name + "_" + user_tag)
+    candidates.append(name)
+    for candidate in candidates:
+        if os.environ.get(candidate):
+            _USED["password"] = candidate
+            return os.environ[candidate]
+    _missing(name, [scoped] + candidates)
+
+
 '''
 
 _FLOW_HELPER = r'''_POPUP_SELECTOR = ".ui-dialog, .modal, .bootbox, .noty_bar, .noty_message, .swal2-popup, .jconfirm-box, .toast, .alert, [role=dialog], [role=alertdialog], [role=alert]"
@@ -373,16 +501,138 @@ def _popup_texts(page):
         return []
 
 
-def _creation_problem(page, seconds=5):
-    # After a save: the text of an error pop-up if one appears, or "" when the save went through.
-    for _ in range(int(seconds * 2)):
-        for text in _popup_texts(page):
+_CREATE_BUTTON_JS = """() => Array.from(document.querySelectorAll('button, input[type=button], input[type=submit], a')).some(e => {
+    const t = ((e.tagName === 'INPUT' && e.value) ? e.value : (e.innerText || '')).trim();
+    if (!/^(create|save|submit)$/i.test(t)) return false;
+    const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+})"""
+
+_REQUIRED_JS = """() => {
+    const vis = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+    const out = [];
+    document.querySelectorAll('label, th, td, span, b, strong').forEach(l => {
+        if (!vis(l) || l.children.length > 2) return;
+        const t = (l.innerText || '').trim();
+        if (!t.endsWith('*') || t.length > 60) return;
+        const row = l.closest('tr, .form-group, .row');
+        if (!row) return;
+        const ctrls = Array.from(row.querySelectorAll('input, select, textarea')).filter(c => !['hidden', 'button', 'submit', 'file', 'checkbox'].includes(c.type) && (vis(c) || c.type === 'radio'));
+        if (!ctrls.length) return;
+        const radios = ctrls.filter(c => c.type === 'radio');
+        const empty = radios.length ? !radios.some(c => c.checked) : ctrls.every(c => !(c.value || '').trim());
+        const name = t.replace(/[*]/g, '').trim();
+        if (empty && name && !out.includes(name)) out.push(name);
+    });
+    return out;
+}"""
+
+_RADIO_JS = "e => e.matches('input[type=radio]') ? e : ((e.control && e.control.type === 'radio') ? e.control : e.querySelector('input[type=radio]'))"
+_CHOSEN = []
+
+
+def _unfilled_required(page):
+    # Names of the required (*) fields that are still empty on the form.
+    try:
+        return page.evaluate(_REQUIRED_JS)
+    except Exception:
+        return []
+
+
+def _radio_of(el):
+    try:
+        return el.evaluate_handle(_RADIO_JS).as_element()
+    except Exception:
+        return None
+
+
+def _choose(page, el, inp):
+    # Select a radio button, trying the recorded click first and then other ways until the button really is selected.
+    for how in ("click", "check", "label", "script"):
+        try:
+            if how == "click":
+                el.click(timeout=3000)
+            elif how == "check":
+                inp.check(timeout=3000, force=True)
+            elif how == "label":
+                label = inp.evaluate_handle("e => (e.labels && e.labels[0]) || e.closest('label')").as_element()
+                if label:
+                    label.click(timeout=3000)
+            else:
+                inp.evaluate("e => { e.checked = true; for (const t of ['click', 'input', 'change']) e.dispatchEvent(new Event(t, {bubbles: true})); }")
+        except Exception:
+            pass
+        page.wait_for_timeout(300)
+        try:
+            if inp.is_checked():
+                if how != "click":
+                    print("[IR-CHOICE] the option was selected by another way (" + how + ") because the plain click did not select it", flush=True)
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _click(page, loc, timeout=5000):
+    # A normal click, except that a radio button is checked afterwards to make sure it really got selected.
+    el = loc.first
+    el.wait_for(state="attached", timeout=timeout)
+    inp = _radio_of(el)
+    if inp is None:
+        el.click(timeout=timeout)
+        return
+    if not _choose(page, el, inp):
+        raise RuntimeError("Could not select the option: it stayed unselected after several ways of selecting it.")
+    _CHOSEN.append(loc)
+
+
+def _reapply_choices(page):
+    # Radio buttons can be cleared when the page refreshes itself (for example after an employee is picked): select them again before saving.
+    for loc in _CHOSEN:
+        try:
+            el = loc.first
+            inp = _radio_of(el)
+            if inp is not None and not inp.is_checked():
+                print("[IR-CHOICE] an option had been reset by the page; selecting it again", flush=True)
+                _choose(page, el, inp)
+        except Exception:
+            pass
+
+
+def _creation_problem(page, seconds=20, strict=True):
+    # After a save. Returns the text of an error pop-up (the caller may try again), "" when the save went through,
+    # or "STOP: ..." when the save clearly did not happen and trying another employee would not help.
+    url0 = page.url
+    seen_popup = False
+    for i in range(int(seconds * 2)):
+        texts = _popup_texts(page)
+        for text in texts:
             if _PROBLEM_WORDS.search(text):
                 return text
-            if _DONE_WORDS.search(text):
-                return ""
+        if any(_DONE_WORDS.search(text) for text in texts):
+            return ""
+        if texts:
+            seen_popup = True
+        if not strict:
+            page.wait_for_timeout(500)
+            continue
+        try:
+            still_open = page.evaluate(_CREATE_BUTTON_JS)
+        except Exception:
+            still_open = True
+        if (not still_open and i >= 1) or page.url != url0:
+            return ""
+        if i == 6 and not texts:
+            missing = _unfilled_required(page)
+            if missing:
+                return "STOP: Create did not go through. These required fields are still empty: " + ", ".join(missing) + "."
         page.wait_for_timeout(500)
-    return ""
+    if not strict or seen_popup:
+        return ""
+    missing = _unfilled_required(page)
+    if missing:
+        return "STOP: Create did not go through. These required fields are still empty: " + ", ".join(missing) + "."
+    return "STOP: Create was clicked but the form is still open and no confirmation or error message appeared, so the proposal was most likely not created."
 
 
 def _wait_for_confirm_or_error(page, seconds=6):
@@ -492,6 +742,47 @@ def _click_and_choose_file(page, locator):
 
 '''
 
+_RUN_TESTS_BAT = '''@echo off
+rem Runs the tests: creates a private Python environment the first time, installs what is needed, then runs pytest.
+cd /d "%~dp0"
+if not exist ".env" (
+  copy ".env.example" ".env" >nul
+  echo A settings file named .env was created. Fill in the blank values, save it, then run RUN_TESTS.bat again.
+  start /wait notepad ".env"
+  pause
+  exit /b 1
+)
+where py >nul 2>nul
+if errorlevel 1 (
+  echo Python was not found. Install Python 3.10 or newer from https://www.python.org/downloads/ and run this file again.
+  pause
+  exit /b 1
+)
+if not exist ".venv\\Scripts\\python.exe" (
+  echo Setting up Python for this project ^(first run only^)...
+  py -m venv .venv
+)
+".venv\\Scripts\\python.exe" -m pip install --quiet -r requirements.txt
+".venv\\Scripts\\python.exe" -m playwright install chromium
+".venv\\Scripts\\python.exe" -m pytest -s %*
+pause
+'''
+
+_RUN_TESTS_SH = '''#!/usr/bin/env sh
+# Runs the tests: creates a private Python environment the first time, installs what is needed, then runs pytest.
+cd "$(dirname "$0")" || exit 1
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "A settings file named .env was created. Fill in the blank values, save it, then run ./run_tests.sh again."
+  exit 1
+fi
+[ -d .venv ] || python3 -m venv .venv || exit 1
+. .venv/bin/activate
+python -m pip install --quiet -r requirements.txt
+python -m playwright install chromium
+python -m pytest -s "$@"
+'''
+
 def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     scenario=ir.get('scenario') or {}; scenario_name=scenario.get('name','Generated Scenario')
     module=_snake(scenario_name); cls=_pascal(scenario_name)+'Page'; test_fn='test_'+_snake(scenario_name)
@@ -520,8 +811,10 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     files={}
     files[f'pages/{module}_page.py']='\n'.join(page_lines).rstrip()+'\n'
     files['pages/__init__.py']=''
-    lines=['import base64','import datetime','import os','import tempfile','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"','    _skip = 0']
-    _i=lines.index('def _goto_with_retry(page, url):'); lines[_i:_i]=_SETTLE_HELPER.split('\n')+_FLOW_HELPER.split('\n')
+    lines=['import base64','import datetime','import os','import pytest','import tempfile','import time','from pathlib import Path','from urllib.parse import quote, quote_plus','from playwright.sync_api import expect',f'from pages.{module}_page import {cls}','','def _goto_with_retry(page, url):','    last_status = None','    for attempt in range(3):','        response = page.goto(url, wait_until="domcontentloaded")','        last_status = response.status if response else None','        if last_status is None or last_status < 500:','            return response','        if attempt < 2:','            time.sleep(2 * (attempt + 1))','    raise RuntimeError(f"Target unavailable: HTTP {last_status} for {url}")','','','def _rebase(text, recorded_origin, base_url):','    """Point absolute recorded-environment URLs inside a query string (e.g. the OIDC redirect_uri) at the environment under test."""','    target = base_url.rstrip("/")','    return text.replace(quote_plus(recorded_origin), quote_plus(target)).replace(recorded_origin, target)','','',f'def {test_fn}(page, base_url):',f'    screen = {cls}(page)','    assets = Path(__file__).resolve().parents[1] / "assets"','    _skip = 0']
+    _i=lines.index('def _goto_with_retry(page, url):'); _secret_names={str((x.get('value') or {}).get('reference')) for x in ir['steps'] if (x.get('value') or {}).get('source')=='secret' and (x.get('value') or {}).get('reference')}
+    _recorded={str(k):('' if v.get('default') is None else str(v.get('default'))) for k,v in params.items() if isinstance(v,dict) and str(k) not in _secret_names}
+    lines[_i:_i]=_SETTLE_HELPER.split('\n')+_FLOW_HELPER.split('\n')+_SETTING_HELPER.split('\n')+[f'_SCENARIO = {_json(module.upper())}',f'_DEFAULTS = {json.dumps(_recorded,ensure_ascii=False)}','','']
     source_map={}
     ordered_steps=_ordered_steps(ir)
     # When a recorded employee PIN is picked from a list and a later click saves the form, the part from opening the list to saving
@@ -567,6 +860,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         lines.append(f'    # IR-STEP: {sid}')
         lines.append(f'    print("[IR-STEP] {sid} {action} ({step_index+1}/{len(ordered_steps)})", flush=True)')
         if action=='click' and re.search(r'create|save|submit',str(step.get('element') or ''),re.I):
+            lines.append('    _reapply_choices(page)')
             lines.append('    _attach_documents(page)')
         if confirm_idx is not None and step_index==confirm_idx:
             lines += ['    _problem = _wait_for_confirm_or_error(page)', '    if _problem:', '        return _problem']
@@ -689,7 +983,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append(f'        {loc}.first.click(timeout=3000)')
                 else:
                     lines.append('    try:')
-                    lines.append(f'        {loc}.first.click(timeout=5000)')
+                    lines.append(f'        _click(page, {loc})')
                     lines.append('    except Exception:')
                     navigated_to=(step.get('metadata') or {}).get('navigatedTo')
                     if navigated_to and not _is_button_element(element):
@@ -699,6 +993,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                         lines.append(f'        page.goto(base_url.rstrip("/") + {_json(rel)})')
                     else:
                         lines.append(f'        {loc}.first.dispatch_event("click", timeout=3000)')
+                    lines.append('    _quiet(page)')
             elif action=='fill':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
                 v=step.get('value') or {}; ref=str(v.get('reference') or 'VALUE')
@@ -717,15 +1012,17 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 if autocomplete_fill:
                     lines.append(f'    {loc}.click()')
                     lines.append(f'    {loc}.fill("")')
-                    lines.append(f'    {loc}.press_sequentially(os.environ[{_json(ref)}], delay=150)')
+                    lines.append(f'    {loc}.press_sequentially(_setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}), delay=150)')
                 else:
-                    lines.append(f'    {loc}.fill(os.environ[{_json(ref)}])')
+                    lines.append(f'    {loc}.fill(_setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}))')
+                    lines.append('    _quiet(page)')
             elif action=='select':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
-                v=step.get('value') or {}; ref=str(v.get('reference') or 'VALUE'); lines.append(f'    {loc}.select_option(os.environ[{_json(ref)}])')
+                v=step.get('value') or {}; ref=str(v.get('reference') or 'VALUE'); lines.append(f'    _pick(page, {loc}, _setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}))')
             elif action=='check':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
                 lines.append(f'    {loc}.check()')
+                lines.append('    _quiet(page)')
             elif action=='uncheck':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
                 lines.append(f'    {loc}.uncheck()')
@@ -764,7 +1061,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         if block_end is None: block_end=len(lines)
         _wraps.append((block_start,block_end,['    def _attempt(_skip):'],[
             '        return _creation_problem(page)','',
-            '    _tries = 0','    while True:','        _problem = _attempt(_tries)','        if not _problem:','            break',
+            '    _tries = 0','    while True:','        _problem = _attempt(_tries)','        if not _problem:','            break','        if _problem.startswith("STOP: "):','            raise AssertionError(_problem[6:])',
             '        print("[IR-RETRY] employee " + str(_tries + 1) + " was rejected: " + " ".join(_problem.split())[:300], flush=True)',
             '        _tries += 1','        if _tries >= 10:',
             '            raise AssertionError("The proposal could not be created with any of the first 10 employees. Last message: " + " ".join(_problem.split())[:300])',
@@ -776,10 +1073,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
             f'        print({_json("[IR-SKIP] "+_first+" to "+_last+": the browser is already signed in, so the recorded second sign-in is skipped.")}, flush=True)']))
     for _w in sorted(_wraps,key=lambda w:w[0],reverse=True): _wrap_block(*_w)
     files[f'tests/test_{module}.py']='\n'.join(lines)+'\n'; files['tests/__init__.py']=''
-    files['tests/conftest.py']='''import os
-import pytest
-from playwright.sync_api import sync_playwright
-
+    files['tests/conftest.py']=_CONFTEST_HEAD+'''
 
 @pytest.fixture(scope="session")
 def base_url():
@@ -792,7 +1086,8 @@ def page():
     headless = os.environ.get("HEADLESS", "true").lower() != "false"
     with sync_playwright() as p:
         browser_type = getattr(p, browser_name if browser_name in {"chromium", "firefox", "webkit"} else "chromium")
-        browser = browser_type.launch(headless=headless)
+        slow_mo = int(os.environ.get("SLOW_MO", "0" if headless else "250") or 0)
+        browser = browser_type.launch(headless=headless, slow_mo=slow_mo)
         context = browser.new_context()
         pg = context.new_page()
         yield pg
@@ -878,11 +1173,49 @@ def pytest_runtest_makereport(item, call):
     secret_refs=sorted({str((s.get('value') or {}).get('reference')) for s in ir['steps'] if (s.get('value') or {}).get('source')=='secret' and (s.get('value') or {}).get('reference')})
     parameter_refs=sorted(str(k) for k in params.keys())
     runtime_refs=sorted(set(parameter_refs) | set(secret_refs))
-    env=[f'BASE_URL={_base_url_from_ir(ir)}','BROWSER=chromium','HEADLESS=true']+[f'{x}=' for x in runtime_refs]
+    _user_default=next((str(params[n].get('default')) for n in ('username','userName','user','userId','userid','login','loginId') if isinstance(params.get(n),dict) and params[n].get('default') not in (None,'')),'')
+    _user_tag=re.sub(r'[^A-Za-z0-9]+','_',_user_default).strip('_').upper()
+    _scenario_key=module.upper()
+    env=[f'BASE_URL={_base_url_from_ir(ir)}','BROWSER=chromium','HEADLESS=false','SLOW_MO=250','STEP_DELAY_MS=300']
+    for _name in parameter_refs:
+        if _name in secret_refs: continue
+        _spec=params.get(_name)
+        _val=_spec.get('default') if isinstance(_spec,dict) else None
+        env.append(f'{_name}__{_scenario_key}={"" if _val is None else _val}')
+    for _name in secret_refs:
+        env.append(f'{_name}_{_user_tag}=' if _user_tag else f'{_name}=')
+    readme_secret_line=next((x for x in env if secret_refs and x.startswith(secret_refs[0])),'SECRET_PASSWORD=')
     files['.env.example']='\n'.join(env)+'\n'
+    files['RUN_TESTS.bat']=_RUN_TESTS_BAT
+    files['run_tests.sh']=_RUN_TESTS_SH
     files['automation-ir.json']=json.dumps(ir,indent=2,ensure_ascii=False,sort_keys=True)+'\n'
     files['source-map.json']=json.dumps(source_map,indent=2)+'\n'
-    files['README.md']=f'''# {scenario_name} — Playwright + Pytest\n\nGenerated deterministically from canonical Automation IR.\n\n## Run\n\n```powershell\npy -m pip install -r requirements.txt\npy -m playwright install\n$env:BASE_URL="https://your-environment.example"\npy -m pytest\n```\n\nSecrets are referenced by environment-variable name and are never emitted as plaintext.\n'''
+    files['README.md']=f'''# {scenario_name} — Playwright + Pytest
+
+Generated deterministically from canonical Automation IR.
+
+## Easiest way to run it (Windows)
+
+1. Open this folder in VS Code (File > Open Folder).
+2. Double-click `RUN_TESTS.bat`. The first time it creates a file named `.env` and opens it.
+3. Type the missing values in `.env` (the password goes after the = sign on the line that starts with `{readme_secret_line}`), save, and double-click `RUN_TESTS.bat` again.
+
+On Mac or Linux run `./run_tests.sh` instead.
+
+## Run it yourself from the VS Code terminal
+
+```powershell
+py -m venv .venv
+.venv\\Scripts\\Activate.ps1
+pip install -r requirements.txt
+py -m playwright install chromium
+py -m pytest -s
+```
+
+The tests read BASE_URL, the user name and the password from the `.env` file in this folder, so nothing needs to be typed into the terminal.
+To use another environment, change the `BASE_URL` line. To watch the browser, set `HEADLESS=false`.
+Secrets are referenced by name and are never written into the test code. `.env` holds real passwords: do not share or commit it.
+'''
     syntax=[]
     for path,c in files.items():
         if path.endswith('.py'):

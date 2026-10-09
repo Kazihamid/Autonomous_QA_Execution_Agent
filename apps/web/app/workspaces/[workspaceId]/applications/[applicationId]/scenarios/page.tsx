@@ -149,14 +149,14 @@ export default function ScenarioRepository(){
               {envs.map(x=><option key={x.id} value={x.id}>{x.name} — {x.baseUrl}</option>)}
             </select>
           </label>
-          <button onClick={()=>run(selectedIds,"run-bulk")} disabled={!selectedIds.length||running||!envId}>{busy==="run-bulk"?"Running…":`Run selected (in order)${envName?` on ${envName}`:""}`}</button>
+          <button className="tint-blue" onClick={()=>run(selectedIds,"run-bulk")} disabled={!selectedIds.length||running||!envId} title={envName?`Runs the selected scenarios on ${envName}`:"Choose an environment first"}>{busy==="run-bulk"?"Running…":"Run Selected (In Order)"}</button>
           <label className="muted small-note toolbar-check"><input type="checkbox" checked={stopOnFailure} onChange={e=>setStopOnFailure(e.target.checked)} disabled={running}/>Stop on first failure</label>
         </div>
         <div className="toolbar-group export">
           <label className="muted toolbar-label">Export as
             <select value={target} onChange={e=>setTarget(e.target.value)} aria-label="Export framework"><option value="PLAYWRIGHT_PYTEST">Python + Playwright + Pytest</option><option value="SELENIUM_TESTNG">Java + Selenium + TestNG</option></select>
           </label>
-          <button className="export-btn" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"}>{busy==="export"?"Exporting…":"Export selected"}</button>
+          <button className="export-btn" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"} title="Downloads the selected scenarios as one project that runs from VS Code">{busy==="export"?"Exporting…":"Export as Project"}</button>
         </div>
       </div>
       <p className="muted small-note">Scenarios are grouped by module and feature. They run one after another in the # order shown below (▲▼ change the order inside a feature). The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
