@@ -44,9 +44,9 @@ cd Autonomous_QA_Execution_Agent
 .\START_PROJECT.bat
 ```
 
-On first start, the startup script creates `.env.runtime` from `.env.runtime.example` when needed.
+On first start, the startup script creates `.env` from `.env.example` when needed.
 
-For scenarios that require secrets, edit `.env.runtime` locally:
+For scenarios that require secrets, edit `.env` locally:
 
 ```env
 SECRET_PASSWORD=
@@ -109,7 +109,7 @@ The platform itself can run locally with Docker. Executing tests against protect
 - All published ports bind to `127.0.0.1`.
 - The runner passes test code only a minimal environment plus the secrets the generated project declares in its `.env.example`.
 - Set `POSTGRES_PASSWORD` in your environment to override the local default.
-- `.env.runtime` is ignored by Git.
+- `.env` is ignored by Git.
 - Recorder and runner helper ports are bound to localhost where appropriate.
 - Sensitive inputs are represented as secret references rather than persisted plaintext values.
 - The local noVNC setup is intended for development use and should not be exposed publicly.

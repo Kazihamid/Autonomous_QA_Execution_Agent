@@ -1,3 +1,8 @@
+# Single .env file
+
+- `.env.runtime` and `.env.runtime.example` are replaced by one file: copy `.env.example` to `.env`. It holds the platform settings and the test passwords/test data. The runner reads it on every run, so a changed password needs no restart.
+- Exported projects now ship a ready `.env`, `RUN_TESTS.bat` and `run_tests.sh`. The tests read `.env` themselves, so nothing has to be typed into the terminal.
+
 # Changes in this cleanup pass
 
 **Repo hygiene**

@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-DEFAULT_SECRETS_FILE = "/run/runtime/.env.runtime"
+DEFAULT_SECRETS_FILE = "/run/runtime/.env"
 USER_PARAMETERS = ("username", "userName", "user", "userId", "userid", "login", "loginId")
 
 
@@ -49,6 +49,15 @@ def candidates(name: str, base_url: str, parameters: dict[str, str]) -> list[str
     if user:
         out.append(f"{base}_{user}")
     out.append(base)
+    # A secret recorded under a name that already ends with the user (SECRET_PASSWORD_153872) also finds the
+    # per-environment line written without it: SECRET_PASSWORD_ERPSTAGING_153872, SECRET_PASSWORD_ERPSTAGING, SECRET_PASSWORD.
+    if user and base.endswith("_" + user) and len(base) > len(user) + 1:
+        stem = base[: -(len(user) + 1)]
+        if env:
+            out.append(f"{stem}_{env}_{user}")
+            out.append(f"{stem}_{env}")
+        out.append(f"{stem}_{user}")
+        out.append(stem)
     return list(dict.fromkeys(out))
 
 

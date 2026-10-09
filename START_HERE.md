@@ -8,7 +8,7 @@
 4. Wait for Recorder, Code Generator, Runner, Control Plane, and Web UI health checks.
 5. Open `http://localhost:3000`.
 
-The startup script creates `.env.runtime` from `.env.runtime.example` if it does not exist.
+The startup script creates `.env` from `.env.example` if it does not exist.
 
 For scenarios that require a runtime secret, configure:
 
@@ -16,7 +16,7 @@ For scenarios that require a runtime secret, configure:
 SECRET_PASSWORD=
 ```
 
-Do not commit `.env.runtime`.
+Do not commit `.env`.
 
 ## Recorder flow
 

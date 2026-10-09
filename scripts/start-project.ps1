@@ -4,17 +4,17 @@ Set-Location $Root
 Write-Host ""; Write-Host "Autonomous QA Execution Agent v0.3.2 - Easy Start" -ForegroundColor Cyan; Write-Host "================================================" -ForegroundColor Cyan
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { Write-Host "Docker was not found." -ForegroundColor Red; exit 1 }
 try { docker info *> $null } catch { Write-Host "Docker Desktop is installed but is not running." -ForegroundColor Red; exit 1 }
-if (-not (Test-Path ".env.runtime")) {
-  if (Test-Path ".env.runtime.example") {
-    Copy-Item ".env.runtime.example" ".env.runtime"
-    Write-Host "Created .env.runtime from .env.runtime.example." -ForegroundColor Yellow
+if (-not (Test-Path ".env")) {
+  if (Test-Path ".env.example") {
+    Copy-Item ".env.example" ".env"
+    Write-Host "Created .env from .env.example. Open it and fill in your passwords (see the comments inside)." -ForegroundColor Yellow
   } else {
-    New-Item -ItemType File -Path ".env.runtime" | Out-Null
-    Write-Host "Created empty .env.runtime." -ForegroundColor Yellow
+    New-Item -ItemType File -Path ".env" | Out-Null
+    Write-Host "Created an empty .env." -ForegroundColor Yellow
   }
 }
-if (Select-String -Path ".env.runtime" -Pattern "^SECRET_PASSWORD=$" -Quiet) {
-  Write-Host "NOTE: SECRET_PASSWORD is blank. The platform can start, but scenarios that require this secret will not run until you configure .env.runtime." -ForegroundColor Yellow
+if (Select-String -Path ".env" -Pattern "^SECRET_PASSWORD=(''|)$" -Quiet) {
+  Write-Host "NOTE: SECRET_PASSWORD is blank. The platform can start, but scenarios that need a password will not run until you fill in .env." -ForegroundColor Yellow
 }
 Write-Host "[1/6] Building and starting PostgreSQL, Recorder, Code Generator, Runner, Control Plane, and Web UI..." -ForegroundColor Green
 docker compose -f docker-compose.yml up --build -d

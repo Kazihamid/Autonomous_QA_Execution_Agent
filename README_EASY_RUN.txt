@@ -19,7 +19,7 @@ Useful files:
 
 V0.1.2 RUNTIME NOTE
 -------------------
-Passwords live in .env.runtime (copy .env.runtime.example; never commit it). The runner picks the password for the
+Passwords live in .env (copy .env.example; never commit it). The runner picks the password for the
 environment and user being tested, e.g. SECRET_PASSWORD_ERPSTAGING_153872 (one user), SECRET_PASSWORD_ENV27 (all users
 on env27) or SECRET_PASSWORD (fallback). The file is read on every run, so a changed password needs no restart.
 If a run still uses an old value, run: docker compose up -d --force-recreate runner
