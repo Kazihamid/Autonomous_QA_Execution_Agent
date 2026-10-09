@@ -1184,7 +1184,7 @@ def pytest_runtest_makereport(item, call):
         env.append(f'{_name}__{_scenario_key}={"" if _val is None else _val}')
     for _name in secret_refs:
         env.append(f'{_name}_{_user_tag}=' if _user_tag else f'{_name}=')
-    readme_secret_line=next((x for x in env if secret_refs and x.startswith(secret_refs[0])),'SECRET_PASSWORD=')
+    readme_secret_line=next((x for x in env if secret_refs and x.startswith(secret_refs[0])),'SECRET_PASSWORD'+'=')
     files['.env.example']='\n'.join(env)+'\n'
     files['RUN_TESTS.bat']=_RUN_TESTS_BAT
     files['run_tests.sh']=_RUN_TESTS_SH

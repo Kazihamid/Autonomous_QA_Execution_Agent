@@ -375,6 +375,9 @@ def test_exported_conftest_loads_dot_env_with_quotes_and_hashes(tmp_path):
     r = req("PLAYWRIGHT_PYTEST"); out = generate_project(r)
     for f in out["files"]:
         target = tmp_path / f["path"]; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(f["content"], encoding="utf-8")
+    (tmp_path / "playwright").mkdir(exist_ok=True)  # stand-in so the test does not need Playwright installed
+    (tmp_path / "playwright" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "playwright" / "sync_api.py").write_text("def sync_playwright():\n    raise RuntimeError('not used')\nexpect = None\n", encoding="utf-8")
     (tmp_path / "tests" / "test_probe.py").write_text(textwrap.dedent("""
         import os
         def test_values():
@@ -392,6 +395,9 @@ def test_exported_conftest_reads_special_characters_without_quotes(tmp_path):
     r = req("PLAYWRIGHT_PYTEST"); out = generate_project(r)
     for f in out["files"]:
         target = tmp_path / f["path"]; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(f["content"], encoding="utf-8")
+    (tmp_path / "playwright").mkdir(exist_ok=True)  # stand-in so the test does not need Playwright installed
+    (tmp_path / "playwright" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "playwright" / "sync_api.py").write_text("def sync_playwright():\n    raise RuntimeError('not used')\nexpect = None\n", encoding="utf-8")
     (tmp_path / "tests" / "test_probe.py").write_text(textwrap.dedent("""
         import os
         def test_values():
