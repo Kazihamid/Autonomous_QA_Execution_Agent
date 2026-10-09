@@ -76,6 +76,7 @@ services:
       context: ./services/control-plane
       dockerfile: Dockerfile
     environment:
+      SCENARIO_BACKUP_DIR: /backups
       SPRING_PROFILES_ACTIVE: dev
       PLATFORM_ENV: local
       CONTROL_PLANE_PORT: 8080
@@ -89,6 +90,9 @@ services:
       RUNNER_SERVICE_URL: http://runner:8110
     ports:
       - "127.0.0.1:8080:8080"
+    volumes:
+      # A fresh copy of every scenario is written here after each change, so scenarios survive a lost database.
+      - ./scenario-backups:/backups
     depends_on:
       postgres:
         condition: service_healthy
