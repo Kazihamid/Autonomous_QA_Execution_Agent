@@ -691,6 +691,9 @@ def _linked_value(name):
     return ""
 
 
+_RANDOM_VALUES = {}
+
+
 def _setting(name, secret=False):
     # Finds the value for a test-data name or a password the same way the platform does, most specific first.
     # Scenario-specific  NAME__SCENARIO ; then, for passwords, NAME_<ENV>_<USER>, NAME_<ENV>, NAME_<USER> ; then plain NAME ; then the recorded value.
@@ -701,6 +704,12 @@ def _setting(name, secret=False):
             _missing(name, [scoped, "TEST_USERNAME"])
         _USED["user"] = value
         return value
+    if not secret and name not in _SETTING_USER_NAMES and re.search(r"contact|mobile|phone|cell", name, re.I) and not re.search(r"mail", name, re.I):
+        # A contact number is made up for every run (a valid mobile number), so nothing has to be kept in .env. FIXED_CONTACT_NO=017... forces one.
+        if name not in _RANDOM_VALUES:
+            _RANDOM_VALUES[name] = os.environ.get("FIXED_CONTACT_NO", "").strip() or ("01" + str(random.choice([3, 5, 6, 7, 8, 9])) + "".join(str(random.randint(0, 9)) for _ in range(8)))
+            print("[IR-DATA] " + name + " is a made-up contact number for this run: " + _RANDOM_VALUES[name], flush=True)
+        return _RANDOM_VALUES[name]
     if not secret and name not in _SETTING_USER_NAMES:
         value = _override(name)
         pin = ""
@@ -796,7 +805,8 @@ _REQUIRED_JS = """() => {
 }"""
 
 _RADIO_JS = "e => e.matches('input[type=radio]') ? e : ((e.control && e.control.type === 'radio') ? e.control : e.querySelector('input[type=radio]'))"
-_CHOSEN = []
+_CHOSEN = {}
+_PAYMENT = {}
 
 
 def _unfilled_required(page):
@@ -805,6 +815,15 @@ def _unfilled_required(page):
         return page.evaluate(_REQUIRED_JS)
     except Exception:
         return []
+
+
+def _remember(inp, loc):
+    # One remembered choice per radio group: the latest choice replaces an earlier one, so BEFTN and Cheque can never be re-applied against each other.
+    try:
+        group = inp.evaluate("e => e.name || e.id || ''") or "?"
+    except Exception:
+        group = "?"
+    _CHOSEN[group] = loc
 
 
 def _radio_of(el):
@@ -891,19 +910,84 @@ def _radio_choice(hint):
 
 
 def _hold(page, loc):
-    # A page can react to a choice (for example by loading data) and switch the option back a moment later. Let it settle, and choose again if so.
-    for attempt in range(2):
+    # A page can react to a choice (for example by loading data) and switch the option back a moment later.
+    # The option must stay selected for two checks in a row, one second apart; if the page switches it back, it is selected again.
+    stable = 0
+    flips = 0
+    for attempt in range(7):
         page.wait_for_timeout(1000)
         _quiet(page)
         try:
             el = loc.first
             inp = _radio_of(el)
-            if inp is None or inp.is_checked():
+            if inp is None:
                 return
-            print("[IR-CHOICE] the page switched the option back; selecting it again", flush=True)
+            if inp.is_checked():
+                stable += 1
+                if stable >= 2:
+                    return
+                continue
+            stable = 0
+            flips += 1
+            print("[IR-CHOICE] the page switched the option back (" + str(flips) + "); selecting it again", flush=True)
             _choose(page, el, inp)
         except Exception:
             return
+    print("[IR-CHOICE] the page keeps switching this option back; the last state is used", flush=True)
+
+
+_BANK_FIELDS_JS = r"""() => {
+    const wanted = {account_number: /account\s*number/i, account_name: /account\s*name/i, bank_name: /^bank\s*name/i, branch_name: /branch\s*name/i, routing_no: /routing/i};
+    const out = {};
+    const seen = (e) => { const r = e.getBoundingClientRect(); const st = getComputedStyle(e); return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+    for (const e of document.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]), textarea')) {
+        if (!seen(e)) continue;
+        let label = '';
+        if (e.id) { const l = document.querySelector('label[for="' + e.id + '"]'); if (l) label = l.innerText; }
+        if (!label) { const cell = e.closest('td,th,div'); const prev = cell && cell.previousElementSibling; if (prev) label = prev.innerText; }
+        label = (label || '').replace(/\s+/g, ' ').trim();
+        for (const k in wanted) if (!(k in out) && wanted[k].test(label)) out[k] = (e.value || '').trim();
+    }
+    return out;
+}"""
+
+
+def _bank_details_shown(page, seconds=10):
+    # BEFTN pays into the employee's bank account, so the page must show Account Number, Account Name, Bank Name, Branch Name and Bank Routing No. with data.
+    # Returns "" when all five are there, otherwise a short description of what is missing.
+    import time as _t
+    end = _t.time() + seconds
+    missing = "no bank fields"
+    while True:
+        try:
+            got = page.evaluate(_BANK_FIELDS_JS)
+        except Exception:
+            got = {}
+        names = ["account_number", "account_name", "bank_name", "branch_name", "routing_no"]
+        missing = ", ".join(n for n in names if not got.get(n)) or ""
+        if not missing:
+            return ""
+        if _t.time() > end:
+            return missing
+        page.wait_for_timeout(500)
+
+
+def _cheque_if_no_bank_data(page, options, pick):
+    # With BEFTN selected but no bank data for this employee, choose Cheque at once (the employee stays; nothing is picked again).
+    if os.environ.get("BEFTN_FALLBACK_TO_CHEQUE", "on").lower() in ("off", "false", "0", "no"):
+        return None
+    if "beftn" not in ((pick.get("label") or "") + (pick.get("value") or "") + (pick.get("id") or "")).lower():
+        return None
+    cheque = [o for o in options if "cheque" in ((o.get("label") or "") + (o.get("value") or "") + (o.get("id") or "")).lower()]
+    if not cheque:
+        return None
+    _quiet(page)
+    missing = _bank_details_shown(page)
+    if not missing:
+        print("[IR-CHOICE] BEFTN selected and the bank details are shown", flush=True)
+        return None
+    print("[IR-CHOICE] BEFTN selected but the bank details are missing (" + missing + "); selecting Cheque instead", flush=True)
+    return cheque[0]
 
 
 def _click_radio_group(page, hint):
@@ -933,18 +1017,33 @@ def _click_radio_group(page, hint):
             names = ", ".join((o.get("label") or o.get("value") or "?") for o in options)
             raise AssertionError("The option '" + wanted + "' set for " + key + " is not on the page. Options here: " + names)
         pick = match[0]
-    if pick.get("id"):
-        loc = page.locator('input[type=radio][id="' + pick["id"] + '"]')
-    else:
-        loc = page.locator('input[type=radio][name="' + pick["name"] + '"][value="' + pick["value"] + '"]')
+    def locate(o):
+        if o.get("id"):
+            return page.locator('input[type=radio][id="' + o["id"] + '"]')
+        return page.locator('input[type=radio][name="' + o["name"] + '"][value="' + o["value"] + '"]')
+
+    loc = locate(pick)
     inp = loc.first
     how = "set in .env" if wanted else "first option; set " + (key or "NAME") + " in .env to choose another"
     print("[IR-CHOICE] radio group '" + hint.split("*")[0].strip() + "': selecting " + (pick.get("label") or pick.get("value") or pick.get("id") or "?") + " (" + how + ")", flush=True)
-    if _choose(page, inp, inp):
-        _CHOSEN.append(loc)
-        _hold(page, loc)
-        return True
-    return False
+    if not _choose(page, inp, inp):
+        return False
+    _remember(inp, loc)
+    _hold(page, loc)
+    if "beftn" in ((pick.get("label") or "") + (pick.get("value") or "")).lower():
+        _PAYMENT["decided"] = True
+    other = _cheque_if_no_bank_data(page, options, pick)
+    if other is not None:
+        loc2 = locate(other)
+        inp2 = loc2.first
+        if _choose(page, inp2, inp2):
+            _remember(inp2, loc2)
+            _hold(page, loc2)
+            try:
+                print("[IR-CHOICE] Cheque is selected: " + str(inp2.is_checked()), flush=True)
+            except Exception:
+                pass
+    return True
 
 
 def _click(page, loc, timeout=5000, hint=""):
@@ -966,20 +1065,28 @@ def _click(page, loc, timeout=5000, hint=""):
     if inp is None:
         el.click(timeout=timeout)
         return
+    if _PAYMENT.get("decided") and inp is not None:
+        try:
+            if inp.evaluate("e => e.name || e.id || ''") in _CHOSEN:
+                print("[IR-CHOICE] the recorded click on this option group is skipped: the choice already made is kept", flush=True)
+                return
+        except Exception:
+            pass
     if not _choose(page, el, inp):
         raise RuntimeError("Could not select the option: it stayed unselected after several ways of selecting it.")
-    _CHOSEN.append(loc)
+    _remember(inp, loc)
     _hold(page, loc)
 
 
 def _reapply_choices(page):
     # Radio buttons can be cleared when the page refreshes itself (for example after an employee is picked): select them again before saving.
-    for loc in _CHOSEN:
+    # One option per group is remembered, so a payment method decided earlier (BEFTN, or Cheque for lack of bank data) is kept.
+    for group, loc in list(_CHOSEN.items()):
         try:
             el = loc.first
             inp = _radio_of(el)
             if inp is not None and not inp.is_checked():
-                print("[IR-CHOICE] an option had been reset by the page; selecting it again", flush=True)
+                print("[IR-CHOICE] an option had been reset by the page; selecting it again (" + str(group) + ")", flush=True)
                 _choose(page, el, inp)
         except Exception:
             pass
@@ -1741,8 +1848,9 @@ def pytest_runtest_makereport(item, call):
     _user_tag=re.sub(r'[^A-Za-z0-9]+','_',_user_default).strip('_').upper()
     _scenario_key=module.upper()
     env=[f'BASE_URL={_base_url_from_ir(ir)}','BROWSER=chromium','HEADLESS=false','SLOW_MO=250','STEP_DELAY_MS=300']
+    _is_contact=lambda n: bool(re.search(r'contact|mobile|phone|cell',n,re.I)) and not re.search(r'mail',n,re.I)
     for _name in parameter_refs:
-        if _name in secret_refs: continue
+        if _name in secret_refs or _is_contact(_name): continue
         _spec=params.get(_name)
         _val=_spec.get('default') if isinstance(_spec,dict) else None
         env.append(f'{_name}__{_scenario_key}={"" if _val is None else _val}')
@@ -1752,10 +1860,11 @@ def pytest_runtest_makereport(item, call):
     env.append('# Optional: when a recorded drop-down entry is not in the list, take the first real entry. Example: PICK_ANY_IF_MISSING=paymentCollectionPoint (or all)')
     env.append('# optional: PICK_ANY_IF_MISSING')
     env.append('# optional: EMPLOYEE_PIN')
+    env.append('# optional: FIXED_CONTACT_NO')
     env.append('# optional: EMPLOYEE_PIN__'+_scenario_key)
     env.append('# Test data from the recording can be changed in the .env file, for every scenario (NAME=value) or for this scenario only (NAME__'+_scenario_key+'=value). Employee: EMPLOYEE_PIN=00134572 (several PINs separated by commas: one that was not used before is taken).')
     for _name in parameter_refs:
-        if _name in secret_refs or _name in ('username','userName','user','userId','userid','login','loginId'): continue
+        if _name in secret_refs or _is_contact(_name) or _name in ('username','userName','user','userId','userid','login','loginId'): continue
         if not re.fullmatch(r'[A-Za-z0-9]+',_name): continue
         env.append(f'# optional: {_name}')
         env.append(f'# optional: {_name}__{_scenario_key}')
@@ -1893,7 +2002,7 @@ def _java_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     secret_refs=sorted({str((s.get('value') or {}).get('reference')) for s in ir['steps'] if (s.get('value') or {}).get('source')=='secret' and (s.get('value') or {}).get('reference')})
     parameter_refs=sorted(str(k) for k in params.keys())
     runtime_refs=sorted(set(parameter_refs) | set(secret_refs))
-    files['.env.example']='\n'.join([f'BASE_URL={_base_url_from_ir(ir)}','BROWSER=chrome','HEADLESS=true']+[f'{x}=' for x in runtime_refs])+'\n'
+    files['.env.example']='\n'.join([f'BASE_URL={_base_url_from_ir(ir)}','BROWSER=chrome','HEADLESS=true']+[f'{x}=' for x in runtime_refs if not (re.search(r'contact|mobile|phone|cell',x,re.I) and not re.search(r'mail',x,re.I))])+'\n'
     files['automation-ir.json']=json.dumps(ir,indent=2,ensure_ascii=False,sort_keys=True)+'\n'; files['source-map.json']=json.dumps(source_map,indent=2)+'\n'
     files['README.md']=f'''# {scenario_name} — Selenium + TestNG\n\nGenerated deterministically from canonical Automation IR.\n\n## Run\n\n```powershell\n$env:BASE_URL="https://your-environment.example"\nmvn test\n```\n\nJava compilation/build validation is intentionally deferred to an isolated validation/runner environment. Secrets remain environment references.\n'''
     structural=[]
