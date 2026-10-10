@@ -262,7 +262,7 @@ def test_employee_steps_are_retried_with_the_next_row_when_the_application_rejec
     for step in ("step-005", "step-006", "step-007", "step-008"):
         assert "# IR-STEP: " + step in block
     assert "# IR-STEP: step-004" not in block
-    assert "_row = _rows.nth(_skip)" in block and "_attach_documents(page)" in block
+    assert "_row = _rows.nth(_order[_skip])" in block and "_attach_documents(page)" in block
     assert block.index("_attach_documents(page)") < block.index("_wait_for_confirm_or_error(page)") < block.index("# IR-STEP: step-008") + 400
     assert block.rstrip().endswith("return _creation_problem(page)")
     assert "_skip = 0" in test.split("def _attempt")[0]
@@ -441,3 +441,43 @@ def test_environment_address_that_is_a_full_page_address_does_not_double_the_pat
     assert join("https://h.example/admin/login", "/admin/dashboard?a=1") == "https://h.example/admin/dashboard?a=1"
     assert join("https://h.example/", "/admin/login") == "https://h.example/admin/login"
     assert join("https://h.example/app", "/login") == "https://h.example/app/login"
+
+
+def test_recorded_click_on_the_yes_button_of_a_popup_the_test_already_confirmed_is_skipped_not_failed():
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["elements"]["yes-button"] = {"preferred": {"strategy": "id", "value": "yes-button"}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [{"id": "step-005", "action": "click", "element": "yes-button"}]
+    block = _test_source(ir).split("# IR-STEP: step-005")[1]
+    assert 'wait_for(state="visible", timeout=5000)' in block and "[IR-SKIP] step-005" in block and "dispatch_event" not in block
+
+
+def test_confirmation_recorded_by_the_yes_button_id_is_part_of_the_create_attempt():
+    ir = _employee_ir()
+    ir["elements"]["yes"] = {"preferred": {"strategy": "id", "value": "yes-button"}, "alternatives": []}
+    test = _test_source(ir)
+    block = test.split("def _attempt(_skip):")[1].split("_tries = 0")[0]
+    assert "# IR-STEP: step-008" in block and "_wait_for_confirm_or_error(page)" in block
+
+
+def test_recorded_click_on_a_success_notification_is_skipped_when_it_is_gone():
+    import copy
+    ir = copy.deepcopy(IR)
+    key = "job-separation-proposal-has-been-saved-successfully"
+    ir["elements"][key] = {"preferred": {"strategy": "text", "value": "x Job Separation Proposal has been saved successfully"}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [{"id": "step-005", "action": "click", "element": key}]
+    block = _test_source(ir).split("# IR-STEP: step-005")[1]
+    assert "[IR-SKIP] step-005" in block and "dispatch_event" not in block
+
+
+def test_later_click_on_the_create_button_after_the_record_was_saved_is_skipped_when_absent():
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["elements"]["create-button"] = {"preferred": {"strategy": "id", "value": "create-button-x"}, "alternatives": []}
+    ir["steps"] = ir["steps"] + [
+        {"id": "step-005", "action": "click", "element": "create-button"},
+        {"id": "step-006", "action": "click", "element": "create-button"},
+    ]
+    src = _test_source(ir)
+    assert "[IR-SKIP] step-006" in src.split("# IR-STEP: step-006")[1]
+    assert "[IR-SKIP] step-005" not in src.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]

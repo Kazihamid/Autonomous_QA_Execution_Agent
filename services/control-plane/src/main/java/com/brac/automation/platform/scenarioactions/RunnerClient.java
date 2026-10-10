@@ -35,7 +35,7 @@ public class RunnerClient {
             payload.put("scenarioId", scenarioId.toString());
             payload.put("scenarioName", scenarioName);
             payload.put("baseUrl", targetBaseUrl);
-            payload.put("timeoutSeconds", 120);
+            payload.put("timeoutSeconds", 600);
             payload.set("files", mapper.valueToTree(files));
             String body = mapper.writeValueAsString(payload);
             HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/api/v1/run"))

@@ -32,7 +32,7 @@ import org.springframework.stereotype.Service;
 public class RunJobService {
     private static final Logger log = LoggerFactory.getLogger(RunJobService.class);
     private static final String RUN_TARGET = "PLAYWRIGHT_PYTEST";
-    private static final int TEST_TIMEOUT_SECONDS = 180;
+    private static final int TEST_TIMEOUT_SECONDS = 600;
     private static final int MAX_JOBS = 50;
 
     private final ScenarioActionsService scenarios;
