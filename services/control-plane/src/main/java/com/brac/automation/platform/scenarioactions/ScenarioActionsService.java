@@ -21,6 +21,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -60,6 +61,7 @@ public class ScenarioActionsService {
             List<Map<String, Object>> manifestItems = new ArrayList<>();
             Map<String, String> projectFiles = new LinkedHashMap<>();
             Map<String, String> envValues = new LinkedHashMap<>();
+            Set<String> optionalLines = new LinkedHashSet<>();
             List<String> testNgClasses = new ArrayList<>();
             int exported = 0;
 
@@ -81,6 +83,9 @@ public class ScenarioActionsService {
                         String content = generated.content();
                         if (".env.example".equals(generatedPath)) {
                             for (String line : content.split("\\R")) {
+                                String trimmed = line.trim();
+                                if (trimmed.toLowerCase(Locale.ROOT).startsWith("# optional:")) { optionalLines.add(trimmed); continue; }
+                                if (trimmed.startsWith("#")) continue;
                                 if (line.isBlank() || !line.contains("=")) continue;
                                 int p = line.indexOf('=');
                                 String key = line.substring(0, p).trim();
@@ -123,6 +128,7 @@ public class ScenarioActionsService {
             if (!envValues.isEmpty()) {
                 StringBuilder env = new StringBuilder();
                 envValues.forEach((k, v) -> env.append(k).append('=').append(v).append('\n'));
+                optionalLines.forEach(l -> env.append(l).append('\n'));
                 projectFiles.put(".env.example", env.toString());
                 if ("PLAYWRIGHT_PYTEST".equals(target)) {
                     // A ready settings file: the tests read it by themselves, so nothing has to be typed into the terminal.
@@ -134,7 +140,9 @@ public class ScenarioActionsService {
                         if (v.isBlank()) ready.append("# Type the value for ").append(k).append(" on the next line\n");
                         ready.append(k).append('=').append(v).append('\n');
                     });
-                    projectFiles.put(".env", ready.toString());
+                    // The real settings used on the platform (passwords and test data from the platform's own .env), when the runner can supply them.
+                    String platformEnv = runner.envForExport(env.toString());
+                    projectFiles.put(".env", platformEnv != null ? platformEnv : ready.toString());
                 }
             }
             if ("SELENIUM_TESTNG".equals(target) && !testNgClasses.isEmpty()) {
@@ -147,7 +155,7 @@ public class ScenarioActionsService {
             String runInstructions = "PLAYWRIGHT_PYTEST".equals(target)
                 ? "## Run it\n\n" +
                   "1. Open this folder in VS Code (File > Open Folder).\n" +
-                  "2. Open the `.env` file and type the missing values (passwords) after the = sign. Save it.\n" +
+                  "2. Open the `.env` file: it holds the settings used on the platform. Type any value that is missing after the = sign. Save it.\n" +
                   "3. Double-click `RUN_TESTS.bat` (Windows) or run `./run_tests.sh` (Mac or Linux).\n\n" +
                   "The tests read `.env` by themselves, so nothing has to be typed into the terminal.\n" +
                   "To use another environment change the `BASE_URL` line; to run without the browser window set `HEADLESS=true`.\n" +

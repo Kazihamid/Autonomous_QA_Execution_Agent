@@ -99,3 +99,81 @@ def resolve(name: str, base_url: str, parameters: dict[str, str], source: dict[s
         if hit and hit[1] != "":
             return hit[1], hit[0]
     return None, None
+
+
+_HOST_ONLY = {"PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR", "HOSTNAME", "PWD", "OLDPWD", "SHLVL", "USER", "USERNAME", "LOGNAME", "TERM",
+              "PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD", "PYTHONUNBUFFERED", "PYTHON_VERSION", "_"}
+
+
+def export_env(example_text: str, source: dict[str, str] | None = None) -> dict:
+    """Builds the .env of an exported project from the project's .env.example and the platform's own .env.
+
+    Only the names that appear in the example are looked up (so nothing else in the platform .env can leave), each one the
+    way a run on the platform finds it: password lines by environment and user, test-data lines by NAME__SCENARIO then NAME,
+    and the optional settings the example lists (# optional: NAME) when they are set. Values are returned, never logged.
+    """
+    raw_source = source if source is not None else load_source()
+    src = {k: v for k, v in raw_source.items() if k not in _HOST_ONLY and not k.startswith("PYTHON")}
+    active: list[tuple[str, str]] = []
+    optional: list[str] = []
+    for raw in (example_text or "").splitlines():
+        line = raw.strip()
+        if line.lower().startswith("# optional:"):
+            name = line.split(":", 1)[1].strip()
+            if name and name.replace("_", "").isalnum():
+                optional.append(name)
+            continue
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        active.append((key.strip(), value))
+    defaults = dict(active)
+    base_url = defaults.get("BASE_URL", "")
+    parameters: dict[str, str] = {}
+    for key, value in active:
+        if "__" in key and value:
+            parameters.setdefault(key.split("__", 1)[0], value)
+    out: list[str] = []
+    from_platform: list[str] = []
+    missing: list[str] = []
+    written: set[str] = set()
+    for key, value in active:
+        final = value
+        if key == "BASE_URL":
+            pass
+        elif value.strip() == "":
+            found, _ = resolve(key, base_url, parameters, src)
+            if found:
+                final = found
+                from_platform.append(key)
+            else:
+                missing.append(key)
+        elif "__" in key:
+            name = key.split("__", 1)[0]
+            found, _ = resolve(key, base_url, parameters, src)
+            if not found:
+                found, _ = resolve(name, base_url, parameters, src)
+            if found:
+                final = found
+                if found != value:
+                    from_platform.append(key)
+        out.append(f"{key}={final}")
+        written.add(key.upper())
+        written.add(key.split("__", 1)[0].upper())
+    for name in dict.fromkeys(optional):
+        if "__" in name and name.split("__", 1)[0].upper() in written:
+            continue
+        if name.upper() in written:
+            continue
+        found, _ = resolve(name, base_url, parameters, src)
+        if found:
+            out.append(f"{name}={found}")
+            from_platform.append(name)
+            written.add(name.upper())
+    header = ["# Settings for running these tests on your computer, taken from the platform's own .env.",
+              "# This file holds real passwords: keep it private and do not commit it or send it to anyone.",
+              "# BASE_URL is the website the tests run on. Change it to use another environment.",
+              ""]
+    for key in missing:
+        header.append(f"# No value for {key} was found in the platform .env: type it after the = sign below.")
+    return {"env": "\n".join(header + out) + "\n", "fromPlatform": sorted(set(from_platform)), "missing": missing}

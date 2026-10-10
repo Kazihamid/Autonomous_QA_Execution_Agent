@@ -144,6 +144,16 @@ def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, s
     return env
 
 
+class EnvExportRequest(BaseModel):
+    envExample: str = Field(default="", max_length=200000)
+
+
+@app.post("/api/v1/env/export")
+def export_env(request: EnvExportRequest):
+    """The .env of an exported project: the project's own lines, filled from the platform's .env. Names only from the example."""
+    return runtime_secrets.export_env(request.envExample)
+
+
 @app.get("/health")
 def health():
     return {"status": "UP", "service": "runner", "version": "0.4.0"}

@@ -119,4 +119,28 @@ public class RunnerClient {
             n.path("currentAction").asText(""),
             n.path("message").asText(""));
     }
+
+    /**
+     * The .env of an exported project: the project's own lines filled from the platform's .env (passwords and test data).
+     * Returns null when the runner cannot be reached, so the export falls back to the plain template.
+     */
+    public String envForExport(String envExample) {
+        try {
+            var payload = mapper.createObjectNode();
+            payload.put("envExample", envExample);
+            HttpRequest req = HttpRequest.newBuilder(URI.create(baseUrl + "/api/v1/env/export"))
+                .version(HttpClient.Version.HTTP_1_1)
+                .timeout(Duration.ofSeconds(15))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(payload)))
+                .build();
+            HttpResponse<String> response = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) return null;
+            String env = mapper.readTree(response.body()).path("env").asText("");
+            return env.isBlank() ? null : env;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
 }

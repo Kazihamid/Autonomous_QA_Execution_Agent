@@ -53,3 +53,29 @@ def test_secret_named_with_the_user_finds_the_per_environment_line():
     src = {"SECRET_PASSWORD_ERPSTAGING_153872": "x"}
     value, used = rs.resolve("SECRET_PASSWORD_153872", "https://erpstaging.brac.net/", {"username": "153872"}, src)
     assert value == "x" and used == "SECRET_PASSWORD_ERPSTAGING_153872"
+
+
+def test_export_env_fills_passwords_and_test_data_from_the_platform_env_and_nothing_else():
+    example = (
+        "BASE_URL=https://erpstaging.brac.net\nBROWSER=chromium\n"
+        "employeeInfoName__SC=00134572\njobSeparationTypeId__SC=1\nusername__SC=189666\n"
+        "SECRET_PASSWORD_189666=\n"
+        "# optional: PAYMENT_METHOD\n# optional: EMPLOYEE_PIN\n# optional: jobSeparationTypeId\n# optional: NOT_SET\n"
+    )
+    source = {
+        "SECRET_PASSWORD_ERPSTAGING_189666": "stg-pw", "SECRET_PASSWORD_ENV27": "env27-pw",
+        "jobSeparationTypeId": "Retirement", "PAYMENT_METHOD": "Cheque", "EMPLOYEE_PIN": "00077777",
+        "UNRELATED_SECRET": "must-not-leave", "PATH": "/usr/bin",
+    }
+    result = rs.export_env(example, source)
+    env = result["env"]
+    assert "SECRET_PASSWORD_189666=stg-pw" in env
+    assert "jobSeparationTypeId__SC=Retirement" in env and "employeeInfoName__SC=00134572" in env
+    assert "PAYMENT_METHOD=Cheque" in env and "EMPLOYEE_PIN=00077777" in env
+    assert "must-not-leave" not in env and "/usr/bin" not in env and "NOT_SET" not in env and "env27-pw" not in env
+    assert result["missing"] == []
+
+
+def test_export_env_reports_a_password_that_is_not_in_the_platform_env():
+    result = rs.export_env("BASE_URL=https://env27.erp.bracits.net\nusername__SC=1\nSECRET_PASSWORD_1=\n", {})
+    assert result["missing"] == ["SECRET_PASSWORD_1"] and "SECRET_PASSWORD_1=\n" in result["env"]
