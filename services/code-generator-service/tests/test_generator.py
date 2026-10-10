@@ -152,6 +152,7 @@ def test_numeric_table_target_selects_first_row_not_the_recorded_pin():
 
 
 def test_stay_on_admin_swaps_the_auth_landing_page_for_the_admin_page():
+    import types
     from app.generator import core
     ns = {}
     exec(core._SETTLE_HELPER, ns)
@@ -228,7 +229,7 @@ def test_click_on_an_empty_date_field_sets_a_future_date():
     body = test.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]
     assert "import datetime" in test
     assert '.strftime("%d-%m-%Y")' in body and "[IR-DATE] step-005" in body
-    assert "if not any(ch.isdigit() for ch in _field.input_value()):" in body and "press_sequentially" in body and '_field.press("Tab")' in body and "Escape" not in body.replace("not Escape", "")  # an input mask such as __-__-____ counts as empty; Escape would undo the typed value
+    assert "LAST_WORKING_DATE_OFFSET_DAYS" in body and "if _field.input_value() != _when:" in body and "press_sequentially" in body and '_field.press("Tab")' in body and "Escape" not in body.replace("not Escape", "")  # an input mask such as __-__-____ counts as empty; Escape would undo the typed value
     assert "_field = page.locator(" in body and "lastWorkingDate" in body  # the field's own id, not the shared placeholder
 
 
@@ -481,3 +482,133 @@ def test_later_click_on_the_create_button_after_the_record_was_saved_is_skipped_
     src = _test_source(ir)
     assert "[IR-SKIP] step-006" in src.split("# IR-STEP: step-006")[1]
     assert "[IR-SKIP] step-005" not in src.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]
+
+
+def _pin_namespace(tmp_path, monkeypatch, defaults):
+    import os, re, random, tempfile
+    from app.generator import core
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    for key in ("EMPLOYEE_PIN", "EMPLOYEE_PIN__SC", "employeeInfoName", "employeePin", "EMPLOYEE_MEMORY"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("BASE_URL", "https://x.example/")
+    ns = {"os": os, "re": re, "random": random, "tempfile": tempfile, "RADIO_SCENARIO": "SC", "_SCENARIO": "SC", "_DEFAULTS": defaults}
+    ns["pytest"] = __import__("pytest")
+    ns["urlsplit"] = __import__("urllib.parse", fromlist=["urlsplit"]).urlsplit
+    exec(core._SETTLE_HELPER, ns)
+    exec(core._FLOW_HELPER, ns)
+    exec(core._SETTING_HELPER, ns)
+    ns["_SCENARIO"] = "SC"
+    ns["_DEFAULTS"] = defaults
+    return ns
+
+
+def test_employee_pin_from_env_replaces_the_recorded_pin_in_every_employee_field(tmp_path, monkeypatch):
+    defaults = {"employeeInfoName": "00134572", "employeePin": "00134572", "jobSeparationTypeId": "1", "jobSepTerminateBenefitId": "1"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    assert ns["_setting"]("employeeInfoName") == "00134572"
+    monkeypatch.setenv("EMPLOYEE_PIN", "00099999")
+    ns = _pin_namespace(tmp_path / "b", monkeypatch, defaults)
+    monkeypatch.setenv("EMPLOYEE_PIN", "00099999")
+    assert ns["_setting"]("employeeInfoName") == "00099999" and ns["_setting"]("employeePin") == "00099999"
+
+
+def test_several_employee_pins_rotate_between_runs_and_short_values_are_not_linked(tmp_path, monkeypatch):
+    defaults = {"employeeInfoName": "00134572", "employeePin": "00134572", "jobSeparationTypeId": "1", "jobSepTerminateBenefitId": "1"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    monkeypatch.setenv("EMPLOYEE_PIN", "0001,0002")
+    assert ns["_setting"]("employeeInfoName") == "0001"
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    monkeypatch.setenv("EMPLOYEE_PIN", "0001,0002")
+    assert ns["_setting"]("employeeInfoName") == "0002"
+    monkeypatch.setenv("jobSeparationTypeId", "Termination")
+    assert ns["_setting"]("jobSeparationTypeId") == "Termination" and ns["_setting"]("jobSepTerminateBenefitId") == "1"
+    monkeypatch.setenv("employeeInfoName", "00055555")
+    ns = _pin_namespace(tmp_path / "c", monkeypatch, defaults)
+    monkeypatch.setenv("employeeInfoName", "00055555")
+    assert ns["_setting"]("employeePin") == "00055555"
+
+
+def test_env_example_lists_every_test_data_name_as_optional_for_the_platform_runner():
+    import copy
+    ir = copy.deepcopy(IR)
+    ir["parameters"] = {"employeeInfoName": {"type": "string", "default": "00134572"}, "jobSeparationTypeId": {"type": "string", "default": "1"}}
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    out = generate_project(r)
+    env = next(x["content"] for x in out["files"] if x["path"] == ".env.example")
+    assert "# optional: employeeInfoName" in env and "# optional: jobSeparationTypeId" in env and "# optional: EMPLOYEE_PIN" in env
+
+
+def test_changing_the_separation_type_in_env_lets_dependent_lists_take_their_first_entry(tmp_path, monkeypatch):
+    defaults = {"jobSeparationTypeId": "1", "jobSepReasonId": "64", "employeeInfoName": "00134572"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    assert not ns["_any_if_missing"](None, "64")
+    monkeypatch.setenv("jobSeparationTypeId", "Retirement (Voluntary)")
+    assert ns["_setting"]("jobSeparationTypeId") == "Retirement (Voluntary)"
+    assert ns["_setting"]("jobSepReasonId") == "64"
+    assert ns["_any_if_missing"](None, "64")
+    assert not ns["_any_if_missing"](None, "Retirement (Voluntary)")
+    assert ns["_match_option"]([("5", "Retirement (Voluntary)")], "retirement (voluntary)") == "5"
+    assert ns["_match_option"]([("5", "Retirement (Voluntary)")], "Termination") is None
+
+
+def test_changing_only_the_employee_does_not_enable_the_first_entry_fallback(tmp_path, monkeypatch):
+    defaults = {"jobSepReasonId": "64", "employeeInfoName": "00134572"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    monkeypatch.setenv("EMPLOYEE_PIN", "00099999")
+    assert ns["_setting"]("employeeInfoName") == "00099999"
+    assert not ns["_any_if_missing"](None, "64")
+
+
+def test_platform_exports_recorded_values_as_plain_env_names_and_env_choices_still_win(tmp_path, monkeypatch):
+    defaults = {"employeeInfoName": "00134572", "employeePin": "00134572", "jobSeparationTypeId": "1", "jobSepReasonId": "64"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    for key, value in defaults.items():
+        monkeypatch.setenv(key, value)
+    assert ns["_setting"]("employeeInfoName") == "00134572" and not ns["_any_if_missing"](None, "64")
+    monkeypatch.setenv("EMPLOYEE_PIN", "00077777")
+    monkeypatch.setenv("jobSeparationTypeId", "Retirement")
+    ns = _pin_namespace(tmp_path / "p", monkeypatch, defaults)
+    monkeypatch.setenv("EMPLOYEE_PIN", "00077777")
+    monkeypatch.setenv("jobSeparationTypeId", "Retirement")
+    for key in ("employeeInfoName", "employeePin", "jobSepReasonId"):
+        monkeypatch.setenv(key, defaults[key])
+    assert ns["_setting"]("employeeInfoName") == "00077777" and ns["_setting"]("employeePin") == "00077777"
+    assert ns["_setting"]("jobSeparationTypeId") == "Retirement"
+    assert ns["_setting"]("jobSepReasonId") == "64"
+    assert ns["_any_if_missing"](None, "64") and not ns["_any_if_missing"](None, "Retirement")
+
+
+def test_a_scoped_line_holding_the_recorded_value_does_not_hide_employee_pin(tmp_path, monkeypatch):
+    defaults = {"employeeInfoName": "00134572", "jobSeparationTypeId": "1"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    monkeypatch.setenv("employeeInfoName__SC", "00134572")
+    monkeypatch.setenv("jobSeparationTypeId__SC", "1")
+    monkeypatch.setenv("jobSeparationTypeId", "Retirement")
+    monkeypatch.setenv("EMPLOYEE_PIN", "00066666")
+    assert ns["_setting"]("employeeInfoName") == "00066666"
+    assert ns["_setting"]("jobSeparationTypeId") == "Retirement"
+
+
+def test_the_operating_system_user_name_is_never_used_as_the_test_user(tmp_path, monkeypatch):
+    defaults = {"username": "189666", "contactNo": "01787688621", "path": "recorded"}
+    ns = _pin_namespace(tmp_path, monkeypatch, defaults)
+    monkeypatch.setenv("username", "kazihamidur.rahman")
+    monkeypatch.setenv("path", "C:\\Windows")
+    assert ns["_setting"]("username") == "189666"
+    assert ns["_setting"]("path") == "recorded"
+    monkeypatch.setenv("TEST_USERNAME", "200001")
+    assert ns["_setting"]("username") == "200001"
+    monkeypatch.setenv("username__SC", "300002")
+    assert ns["_setting"]("username") == "300002"
+
+
+def test_proposal_date_is_today_and_last_working_date_is_thirty_days_later():
+    import copy
+    ir = _date_ir()
+    ir["elements"]["proposal-date"] = {"preferred": {"strategy": "role", "value": {"role": "textbox", "name": "DD-MM-YYYY"}}, "alternatives": [{"strategy": "id", "value": "proposalDate"}]}
+    ir["steps"] = [{"id": "step-004", "action": "click", "element": "proposal-date"}] + ir["steps"]
+    test = _test_source(ir)
+    proposal = test.split("# IR-STEP: step-004")[1].split("# IR-STEP: step-005")[0]
+    last = test.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]
+    assert 'os.environ.get("PROPOSAL_DATE_OFFSET_DAYS", "0")' in proposal and "proposalDate" in proposal
+    assert 'os.environ.get("LAST_WORKING_DATE_OFFSET_DAYS", "30")' in last and "lastWorkingDate" in last

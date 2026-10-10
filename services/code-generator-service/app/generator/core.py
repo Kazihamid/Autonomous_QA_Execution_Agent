@@ -127,6 +127,14 @@ def _date_format(element: dict[str,Any]) -> str | None:
             return fmt
     return None
 
+def _date_rule(key, element):
+    """(env name, default offset in days, forced) for a date field known by name; the proposal date is today and the last working date is today + 30."""
+    text=' '.join([str(key or ''),str(_id_of(element) or ''),str(element.get('description') or '')]).lower()
+    text=re.sub(r'[^a-z]','',text)
+    if 'proposal' in text: return 'PROPOSAL_DATE_OFFSET_DAYS',0,True
+    if 'lastworking' in text: return 'LAST_WORKING_DATE_OFFSET_DAYS',30,True
+    return None,30,False
+
 def _is_browse_element(element: dict[str,Any]) -> bool:
     """True when the recorded target is a Browse / choose-file control that opens the file picker."""
     desc=str(element.get('description') or '').strip().lower()
@@ -472,8 +480,23 @@ def _retrigger(page):
         pass
 
 
-def _any_if_missing(loc):
-    # PICK_ANY_IF_MISSING=paymentCollectionPoint,otherField (or "all"): when the recorded entry is not in the list, take the first real entry.
+def _match_option(options, value):
+    # The option whose value or text is the wanted one (exact first, then ignoring upper/lower case); None when it is not in the list.
+    for v, t in options:
+        if value == v or value == t:
+            return v
+    low = str(value).lower()
+    for v, t in options:
+        if low == str(v).lower() or low == str(t).lower():
+            return v
+    return None
+
+
+def _any_if_missing(loc, value=""):
+    # When the data was changed in .env, a list that depends on that choice (for example the reasons of another separation type) no longer holds the recorded entry: take its first real entry.
+    # A value typed in .env itself is never replaced this way. PICK_ANY_IF_MISSING=paymentCollectionPoint,otherField (or "all") does the same for named fields.
+    if globals().get("_DATA_CHANGED") and str(value) not in globals().get("_EXPLICIT_DATA", ()):
+        return True
     wanted = [x.strip().lower() for x in os.environ.get("PICK_ANY_IF_MISSING", "").split(",") if x.strip()]
     if not wanted:
         return False
@@ -529,25 +552,29 @@ def _pick(page, loc, value, timeout=15000):
         try:
             if loc.is_enabled():
                 options = loc.evaluate("e => Array.from(e.options).map(o => [o.value, o.text.trim()])")
-                if any(value == v or value == t for v, t in options):
+                if _match_option(options, value) is not None:
                     found = True
                     break
         except Exception:
             pass
         page.wait_for_timeout(250)
         waited += 250
-        if waited >= 3000 and _any_if_missing(loc) and any(v and not t.lower().startswith("select") for v, t in options):
+        if waited >= 3000 and _any_if_missing(loc, value) and any(v and not t.lower().startswith("select") for v, t in options):
             break
     page.wait_for_timeout(_pace_ms())
-    if not found and _any_if_missing(loc):
+    if not found and _any_if_missing(loc, value):
         real = [(v, t) for v, t in options if v and not t.lower().startswith("select")]
         if real:
-            print("[IR-CHOICE] '" + str(value) + "' is not in the list; selecting the first entry '" + real[0][1] + "' instead (PICK_ANY_IF_MISSING)", flush=True)
+            print("[IR-CHOICE] '" + str(value) + "' is not in the list; selecting the first entry '" + real[0][1] + "' instead (the data was changed in .env, or PICK_ANY_IF_MISSING is set)", flush=True)
             loc.select_option(real[0][0])
             _quiet(page)
             _confirm_after(page, loc)
             return
-    loc.select_option(value)
+    match = _match_option(options, value)
+    if match is None and options:
+        names = ", ".join(t for v, t in options if v and not t.lower().startswith("select"))
+        raise AssertionError("The option '" + str(value) + "' is not in the list. Options here: " + names + ". Change the value in the .env file, or set PICK_ANY_IF_MISSING=<field name> to take the first entry.")
+    loc.select_option(match if match is not None else value)
     _quiet(page)
     _confirm_after(page, loc)
 
@@ -600,10 +627,95 @@ def _missing(name, lines):
     pytest.fail("A value is missing: " + name + ". Open the .env file in the project folder and add one of these lines (type the value after the = sign), then run again:\n  " + "\n  ".join(line + "=" for line in lines), pytrace=False)
 
 
+_PIN_CHOICE = {}
+_EXPLICIT_DATA = set()
+_DATA_CHANGED = []
+
+
+def _employee_pin_for(name):
+    # EMPLOYEE_PIN (or EMPLOYEE_PIN__SCENARIO) in .env sets the employee for every field that holds an employee PIN. Several PINs separated by commas: the first one not used in an earlier run is taken.
+    low = name.lower()
+    if not ("employeepin" in low or "employeeinfo" in low or low in ("pin", "empid", "employeeid")):
+        return ""
+    raw = os.environ.get("EMPLOYEE_PIN__" + _SCENARIO) or os.environ.get("EMPLOYEE_PIN") or ""
+    pins = [p.strip() for p in raw.split(",") if p.strip()]
+    if not pins:
+        return ""
+    if "pin" not in _PIN_CHOICE:
+        fresh = [p for p in pins if p not in _TRIED_AT_START]
+        _PIN_CHOICE["pin"] = (fresh or pins)[0]
+        _note_employee_key(_PIN_CHOICE["pin"])
+        print("[IR-DATA] employee PIN " + _PIN_CHOICE["pin"] + " taken from EMPLOYEE_PIN", flush=True)
+    return _PIN_CHOICE["pin"]
+
+
+_OS_USER_VARS = ("username", "user")
+# Names the operating system sets itself (on Windows environment names ignore upper/lower case, so "username" is the name of the person signed in to the computer).
+_OS_ENV_NAMES = {"username", "user", "logname", "userdomain", "computername", "hostname", "home", "homepath", "userprofile", "path", "temp", "tmp", "tmpdir", "lang", "os", "term", "shell", "pwd", "appdata", "processor_architecture", "number_of_processors"}
+
+
+def _user_env(name):
+    # A user name typed in .env. The plain names "username" and "user" belong to the operating system, so for them only NAME__SCENARIO and TEST_USERNAME count.
+    value = os.environ.get(name + "__" + _SCENARIO)
+    if value:
+        return value
+    if name.lower() not in _OS_ENV_NAMES:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return os.environ.get("TEST_USERNAME__" + _SCENARIO) or os.environ.get("TEST_USERNAME") or ""
+
+
+def _override(name):
+    # A value the user set in .env: NAME__SCENARIO, or NAME, when it differs from the recorded value (the platform and the example .env also hold the recorded values themselves, which are not a choice).
+    for key in (name + "__" + _SCENARIO, name):
+        if key == name and name.lower() in _OS_ENV_NAMES:
+            continue
+        value = os.environ.get(key)
+        if value and value != _DEFAULTS.get(name):
+            return value
+    return ""
+
+
+def _linked_value(name):
+    # Two fields that held the same long value when the scenario was recorded (for example the same PIN typed twice) hold the same data: if .env sets one of them, the others follow.
+    recorded = _DEFAULTS.get(name) or ""
+    if len(recorded) < 6 or name in _SETTING_USER_NAMES:
+        return ""
+    for other, other_value in _DEFAULTS.items():
+        if other != name and other not in _SETTING_USER_NAMES and other_value == recorded:
+            value = _override(other) or _employee_pin_for(other)
+            if value:
+                print("[IR-DATA] " + name + " follows " + other + " (same recorded value): " + value, flush=True)
+                return value
+    return ""
+
+
 def _setting(name, secret=False):
     # Finds the value for a test-data name or a password the same way the platform does, most specific first.
     # Scenario-specific  NAME__SCENARIO ; then, for passwords, NAME_<ENV>_<USER>, NAME_<ENV>, NAME_<USER> ; then plain NAME ; then the recorded value.
     scoped = name + "__" + _SCENARIO
+    if not secret and name in _SETTING_USER_NAMES:
+        value = _user_env(name) or _DEFAULTS.get(name)
+        if value is None:
+            _missing(name, [scoped, "TEST_USERNAME"])
+        _USED["user"] = value
+        return value
+    if not secret and name not in _SETTING_USER_NAMES:
+        value = _override(name)
+        pin = ""
+        if not value:
+            pin = _employee_pin_for(name)
+            value = pin or _linked_value(name)
+        if value:
+            _EXPLICIT_DATA.add(str(value))
+            if str(value) != str(_DEFAULTS.get(name, "")) and not pin and not re.search(r"contact|mail|mobile|phone", name, re.I):
+                _DATA_CHANGED.append(name)
+            return value
+        value = _DEFAULTS.get(name) if name in _DEFAULTS else os.environ.get(name)
+        if value is None:
+            _missing(name, [scoped, name])
+        return value
     if os.environ.get(scoped):
         if name in _SETTING_USER_NAMES:
             _USED["user"] = os.environ[scoped]
@@ -621,7 +733,7 @@ def _setting(name, secret=False):
     env_tag = _tag(host)
     user_tag = ""
     for user_name in _SETTING_USER_NAMES:
-        if os.environ.get(user_name + "__" + _SCENARIO) or os.environ.get(user_name) or user_name in _DEFAULTS:
+        if _user_env(user_name) or user_name in _DEFAULTS:
             user_tag = _tag(_setting(user_name))
             break
     candidates = []
@@ -1008,11 +1120,14 @@ def _employee_key(row):
 
 
 def _note_employee(row):
+    _note_employee_key(_employee_key(row))
+
+
+def _note_employee_key(key):
     import json
     import time
     if os.environ.get("EMPLOYEE_MEMORY", "on").lower() in ("off", "false", "0", "no"):
         return
-    key = _employee_key(row)
     if not key:
         return
     try:
@@ -1028,7 +1143,7 @@ def _note_employee(row):
 def _row_order(rows):
     # The order in which list rows are tried: rows matching EMPLOYEE_PIN (comma separated) first, then employees not tried in earlier runs, then the others.
     total = rows.count()
-    wanted = [w.strip().lower() for w in os.environ.get("EMPLOYEE_PIN", "").split(",") if w.strip()]
+    wanted = [w.strip().lower() for w in (os.environ.get("EMPLOYEE_PIN__" + str(globals().get("RADIO_SCENARIO", ""))) or os.environ.get("EMPLOYEE_PIN", "")).split(",") if w.strip()]
     first = []
     if wanted:
         for i in range(total):
@@ -1309,9 +1424,13 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append(f'    _field = {_field_loc}.first')
                     lines.append('    _field.click(timeout=5000)')
                     lines.append(f'    print({_json("[IR-DATE] "+sid+": the date field holds ")} + repr(_field.input_value()) + " after opening the calendar", flush=True)')
-                    lines.append('    if not any(ch.isdigit() for ch in _field.input_value()):')
-                    lines.append(f'        _when = (datetime.date.today() + datetime.timedelta(days=30)).strftime({_json(_date_format(element))})')
-                    lines.append(f'        print({_json("[IR-DATE] "+sid+": the date field was empty after opening the calendar; typing ")} + _when, flush=True)')
+                    _rname,_roff,_forced=_date_rule(key,element)
+                    _offset=f'int(os.environ.get({_json(_rname)}, "{_roff}") or {_roff})' if _rname else str(_roff)
+                    lines.append(f'    _when = (datetime.date.today() + datetime.timedelta(days={_offset})).strftime({_json(_date_format(element))})')
+                    lines.append('    if ' + ('_field.input_value() != _when:' if _forced else 'not any(ch.isdigit() for ch in _field.input_value()):'))
+                    lines.append(f'        print({_json("[IR-DATE] "+sid+": the date field is set to ")} + _when, flush=True)')
+                    if _forced:
+                        lines.append('        _field.fill("")')
                     lines.append('        _field.press_sequentially("".join(ch for ch in _when if ch.isdigit()), delay=40)')
                     lines.append('        if _field.input_value() != _when:')
                     lines.append(f'            _field.evaluate({_json(_js)}, _when)')
@@ -1633,6 +1752,13 @@ def pytest_runtest_makereport(item, call):
     env.append('# Optional: when a recorded drop-down entry is not in the list, take the first real entry. Example: PICK_ANY_IF_MISSING=paymentCollectionPoint (or all)')
     env.append('# optional: PICK_ANY_IF_MISSING')
     env.append('# optional: EMPLOYEE_PIN')
+    env.append('# optional: EMPLOYEE_PIN__'+_scenario_key)
+    env.append('# Test data from the recording can be changed in the .env file, for every scenario (NAME=value) or for this scenario only (NAME__'+_scenario_key+'=value). Employee: EMPLOYEE_PIN=00134572 (several PINs separated by commas: one that was not used before is taken).')
+    for _name in parameter_refs:
+        if _name in secret_refs or _name in ('username','userName','user','userId','userid','login','loginId'): continue
+        if not re.fullmatch(r'[A-Za-z0-9]+',_name): continue
+        env.append(f'# optional: {_name}')
+        env.append(f'# optional: {_name}__{_scenario_key}')
     _radio_keys=[]
     for _st in _ordered_steps(ir):
         if _st.get('action')!='click': continue
