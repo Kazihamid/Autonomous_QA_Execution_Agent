@@ -74,6 +74,21 @@ def required_runtime_variables(root: Path) -> list[str]:
     return sorted(set(required))
 
 
+def optional_runtime_variables(root: Path) -> list[str]:
+    """Names listed in .env.example as '# optional: NAME'. They are passed on when set in the .env file and are never required."""
+    env_example = root / ".env.example"
+    if not env_example.exists():
+        return []
+    names: list[str] = []
+    for raw in env_example.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line.lower().startswith("# optional:"):
+            name = line.split(":", 1)[1].strip()
+            if name and name.replace("_", "").isalnum():
+                names.append(name)
+    return sorted(set(names))
+
+
 def ir_parameter_defaults(root: Path) -> dict[str, str]:
     path = root / "automation-ir.json"
     if not path.exists():
@@ -116,6 +131,16 @@ def build_child_env(base_url: str, required: list[str], ir_defaults: dict[str, s
             notes.append(f"[runner] secret {key} not found; looked for: " + ", ".join(runtime_secrets.candidates(key, base_url, ir_defaults)))
     for key, value in ir_defaults.items():
         env.setdefault(key, value)
+    # A signed-in session is kept for the environment for a while, so the scenario run after a sign-in scenario starts signed in.
+    try:
+        import hashlib
+        from urllib.parse import urlsplit
+        parts = urlsplit(base_url)
+        folder = Path(tempfile.gettempdir()) / "aqea-session"
+        folder.mkdir(parents=True, exist_ok=True)
+        env["SESSION_STATE_FILE"] = str(folder / (hashlib.sha1(f"{parts.scheme}://{parts.netloc}".encode()).hexdigest()[:16] + ".json"))
+    except Exception:
+        pass
     return env
 
 
@@ -145,6 +170,10 @@ def run(request: RunRequest):
             required = required_runtime_variables(root)
             secret_notes: list[str] = []
             env = build_child_env(request.baseUrl, required, runtime_defaults, notes=secret_notes)
+            for _opt in optional_runtime_variables(root):
+                _value, _used = runtime_secrets.resolve(_opt, request.baseUrl, runtime_defaults, runtime_secrets.load_source())
+                if _value:
+                    env[_opt] = _value
 
             missing = [key for key in required_runtime_variables(root) if not env.get(key)]
             if missing:
@@ -278,6 +307,11 @@ def _execute_async(rec: dict, request: RunRequest) -> None:
                 required = required_runtime_variables(root)
                 secret_notes: list[str] = []
                 env = build_child_env(request.baseUrl, required, ir_parameter_defaults(root), notes=secret_notes)
+                for _opt in optional_runtime_variables(root):
+                    _value, _used = runtime_secrets.resolve(_opt, request.baseUrl, ir_parameter_defaults(root), runtime_secrets.load_source())
+                    if _value:
+                        env[_opt] = _value
+                        secret_notes.append(f"[runner] optional {_opt} taken from {_used}")
                 missing = [key for key in required if not env.get(key)]
                 if missing:
                     msg = ("Missing runtime environment variable(s): " + ", ".join(missing)

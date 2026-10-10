@@ -12,4 +12,6 @@ public final class RecoveryDtos {
     public record RecoverableRecording(UUID sessionId, String scenarioName, String moduleName, String featureName, String recordedAt) {}
 
     public record ImportResult(int restored, int created, int copied, int versionsAdded, int skipped) {}
+
+    public record WorkspaceImportResult(UUID workspaceId, String key, String name, int applicationsCreated, int environmentsCreated, ImportResult scenarios) {}
 }

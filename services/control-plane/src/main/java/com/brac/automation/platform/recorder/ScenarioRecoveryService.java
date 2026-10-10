@@ -237,7 +237,7 @@ public class ScenarioRecoveryService {
         return buildBackup(workspaceId, applicationId);
     }
 
-    private ObjectNode buildBackup(UUID workspaceId, UUID applicationId) {
+    ObjectNode buildBackup(UUID workspaceId, UUID applicationId) {
         ObjectNode root = mapper.createObjectNode();
         root.put("format", "aqea-scenarios");
         root.put("formatVersion", 1);
