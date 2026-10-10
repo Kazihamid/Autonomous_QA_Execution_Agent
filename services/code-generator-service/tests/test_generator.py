@@ -1,3 +1,4 @@
+import re
 import json
 from app.generator.core import generate_project
 
@@ -612,3 +613,86 @@ def test_proposal_date_is_today_and_last_working_date_is_thirty_days_later():
     last = test.split("# IR-STEP: step-005")[1].split("# IR-STEP: step-006")[0]
     assert 'os.environ.get("PROPOSAL_DATE_OFFSET_DAYS", "0")' in proposal and "proposalDate" in proposal
     assert 'os.environ.get("LAST_WORKING_DATE_OFFSET_DAYS", "30")' in last and "lastWorkingDate" in last
+
+
+_PAY_HTML = """<table><tr><th>Payment Method *</th><td><label><input type=radio name=pm id=beftn value=BEFTN checked>BEFTN</label> <label><input type=radio name=pm id=cheque value=Cheque>Cheque</label></td></tr>
+<tr class=bank><th>Account Number</th><td><input value="%(a)s"></td><th>Account Name</th><td><input value="%(b)s"></td></tr>
+<tr class=bank><th>Bank Name</th><td><input value="%(c)s"></td><th>Branch Name</th><td><input value="%(d)s"></td></tr>
+<tr class=bank><th>Bank Routing No.</th><td><input value="%(e)s"></td></tr></table>"""
+
+
+def _run_payment(tmp_path, monkeypatch, values):
+    pytest = __import__("pytest")
+    sync_api = pytest.importorskip("playwright.sync_api")
+    core = _pin_namespace(tmp_path, monkeypatch, {})
+    core["_CHOSEN"].clear(); core["_PAYMENT"].clear()
+    monkeypatch.delenv("PAYMENT_METHOD", raising=False)
+    monkeypatch.delenv("PAYMENT_METHOD__SC", raising=False)
+    with sync_api.sync_playwright() as p:
+        try:
+            browser = p.chromium.launch()
+        except Exception:
+            pytest.skip("no browser")
+        page = browser.new_page()
+        page.set_content(_PAY_HTML % values)
+        core["_click_radio_group"](page, "Payment Method * BEFTN Cheque")
+        out = (page.locator("#beftn").is_checked(), page.locator("#cheque").is_checked())
+        browser.close()
+    return out
+
+
+def test_beftn_with_bank_details_stays_beftn(tmp_path, monkeypatch, capsys):
+    full = dict(a="1234", b="Rahim", c="BRAC Bank", d="Gulshan", e="060261")
+    assert _run_payment(tmp_path, monkeypatch, full) == (True, False)
+
+
+def test_beftn_without_bank_details_switches_to_cheque(tmp_path, monkeypatch, capsys):
+    empty = dict(a="", b="", c="", d="", e="")
+    assert _run_payment(tmp_path, monkeypatch, empty) == (False, True)
+    assert "selecting Cheque instead" in capsys.readouterr().out
+
+
+def test_contact_number_is_made_up_and_not_kept_in_env(tmp_path, monkeypatch, capsys):
+    ns = _pin_namespace(tmp_path, monkeypatch, {"contactNo": "01711111111", "employeeInfoName": "x"})
+    monkeypatch.delenv("FIXED_CONTACT_NO", raising=False)
+    monkeypatch.setenv("contactNo", "01799999999")  # a stale value in .env is ignored
+    value = ns["_setting"]("contactNo")
+    assert re.fullmatch(r"01[356789]\d{8}", value) and value not in ("01711111111", "01799999999")
+    assert ns["_setting"]("contactNo") == value
+    monkeypatch.setenv("FIXED_CONTACT_NO", "01812345678")
+    ns["_RANDOM_VALUES"].clear()
+    assert ns["_setting"]("contactNo") == "01812345678"
+
+
+def test_env_files_do_not_list_the_contact_number():
+    ir = _date_ir()
+    ir["parameters"] = {"contactNo": {"default": "01711111111"}, "employeeInfoName": {"default": "x"}}
+    r = req("PLAYWRIGHT_PYTEST"); r["automationIr"] = ir
+    files = {x["path"]: x["content"] for x in generate_project(r)["files"]}
+    env = files[".env.example"]
+    assert "contactNo" not in env and "FIXED_CONTACT_NO" in env
+
+
+_FLIP_HTML = """<table><tr><th>Payment Method *</th><td><label><input type=radio name=pm id=beftn value=BEFTN checked>BEFTN</label> <label><input type=radio name=pm id=cheque value=Cheque>Cheque</label></td></tr>
+<tr><th>Account Number</th><td><input value=""></td><th>Account Name</th><td><input value=""></td></tr>
+<tr><th>Bank Name</th><td><input value=""></td><th>Branch Name</th><td><input value=""></td></tr><tr><th>Bank Routing No.</th><td><input value=""></td></tr></table>
+<script>let n = 0; document.getElementById('cheque').addEventListener('change', () => { if (n++ < 2) setTimeout(() => { document.getElementById('beftn').checked = true; }, 400); });</script>"""
+
+
+def test_cheque_stays_selected_when_the_page_switches_back_to_beftn_twice(tmp_path, monkeypatch, capsys):
+    pytest = __import__("pytest")
+    sync_api = pytest.importorskip("playwright.sync_api")
+    core = _pin_namespace(tmp_path, monkeypatch, {})
+    core["_CHOSEN"].clear(); core["_PAYMENT"].clear()
+    monkeypatch.delenv("PAYMENT_METHOD", raising=False)
+    with sync_api.sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(_FLIP_HTML)
+        core["_click_radio_group"](page, "Payment Method * BEFTN Cheque")
+        core["_reapply_choices"](page)
+        out = (page.locator("#beftn").is_checked(), page.locator("#cheque").is_checked())
+        browser.close()
+    assert out == (False, True)
+    # one remembered choice for the group, and it is Cheque
+    assert len(core["_CHOSEN"]) == 1
