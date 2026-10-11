@@ -10,7 +10,11 @@ public final class SecuritySupport {
 
     public static CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:3000"));
+        String configured = System.getenv("CORS_ALLOWED_ORIGINS");
+        List<String> origins = (configured == null || configured.isBlank())
+            ? List.of("http://localhost:3000")
+            : java.util.Arrays.stream(configured.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
+        config.setAllowedOrigins(origins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Dev-User-Sub", "X-Dev-User-Email", "X-Dev-User-Name", "Idempotency-Key"));
         config.setAllowCredentials(true);

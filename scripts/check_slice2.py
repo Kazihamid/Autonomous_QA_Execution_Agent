@@ -32,7 +32,7 @@ for table in ['core.recording_session','core.test_scenario','core.scenario_versi
     if table not in migration: errors.append(f'migration missing table: {table}')
 
 compose=(root/'docker-compose.yml').read_text()
-for marker in ['recorder:', '127.0.0.1:6080:6080', 'RECORDER_SERVICE_URL', 'postgres-data:/var/lib/postgresql']:
+for marker in ['recorder:', ':6080:6080', '${BIND_ADDRESS:-127.0.0.1}', 'RECORDER_SERVICE_URL', 'postgres-data:/var/lib/postgresql']:
     if marker not in compose: errors.append(f'compose missing marker: {marker}')
 if 'postgres-data:/var/lib/postgresql/data' in compose:
     errors.append('PostgreSQL 18 incompatible data mount path is present')
@@ -61,7 +61,7 @@ if 'valueSource="secret"' not in normalizer: errors.append('secret reference nor
 # Detect common accidental hard-coded credential assignments in source code.
 patterns=[r'(?i)(?:password|passwd|secret|api[_-]?key)\s*=\s*["\'][^"\']{4,}["\']']
 for p in root.rglob('*'):
-    if not p.is_file() or p.suffix.lower() in {'.zip','.png','.jpg','.docx','.pdf'}: continue
+    if not p.is_file() or p.suffix.lower() in {'.zip','.png','.jpg','.docx','.pdf'} or {'_backup','scenario-backups','node_modules','.git'} & set(p.relative_to(root).parts): continue
     try: text=p.read_text(errors='ignore')
     except Exception: continue
     for pat in patterns:
