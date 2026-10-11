@@ -26,7 +26,7 @@ services:
       DISPLAY: :99
     ports:
       - "127.0.0.1:8090:8090"
-      - "127.0.0.1:6080:6080"
+      - "${BIND_ADDRESS:-127.0.0.1}:6080:6080"
     shm_size: "1gb"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8090/health', timeout=2)"]
@@ -88,8 +88,9 @@ services:
       RECORDER_SERVICE_URL: http://recorder:8090
       CODE_GENERATOR_SERVICE_URL: http://code-generator:8100
       RUNNER_SERVICE_URL: http://runner:8110
+      CORS_ALLOWED_ORIGINS: "http://localhost:3000,http://${PUBLIC_HOST:-localhost}:3000"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:8080:8080"
     volumes:
       # A fresh copy of every scenario is written here after each change, so scenarios survive a lost database.
       - ./scenario-backups:/backups
@@ -109,15 +110,15 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_CONTROL_PLANE_URL: http://localhost:8080
+        NEXT_PUBLIC_CONTROL_PLANE_URL: http://${PUBLIC_HOST:-localhost}:8080
         NEXT_PUBLIC_AUTH_MODE: dev
-        NEXT_PUBLIC_RECORDER_VIEW_URL: "http://localhost:6080/vnc.html?autoconnect=1&resize=scale"
+        NEXT_PUBLIC_RECORDER_VIEW_URL: "http://${PUBLIC_HOST:-localhost}:6080/vnc.html?autoconnect=1&resize=scale"
     environment:
-      NEXT_PUBLIC_CONTROL_PLANE_URL: http://localhost:8080
+      NEXT_PUBLIC_CONTROL_PLANE_URL: http://${PUBLIC_HOST:-localhost}:8080
       NEXT_PUBLIC_AUTH_MODE: dev
-      NEXT_PUBLIC_RECORDER_VIEW_URL: "http://localhost:6080/vnc.html?autoconnect=1&resize=scale"
+      NEXT_PUBLIC_RECORDER_VIEW_URL: "http://${PUBLIC_HOST:-localhost}:6080/vnc.html?autoconnect=1&resize=scale"
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${BIND_ADDRESS:-127.0.0.1}:3000:3000"
     depends_on:
       - control-plane
     restart: unless-stopped
