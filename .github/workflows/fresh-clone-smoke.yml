@@ -1,0 +1,106 @@
+name: fresh-clone-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  fresh-clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bootstrap runtime env
+        run: cp .env.runtime.example .env.runtime
+
+      - name: Build full Docker stack
+        run: docker compose build
+
+      - name: Start full Docker stack
+        run: docker compose up -d
+
+      - name: Wait for service health
+        shell: bash
+        run: |
+          set -euo pipefail
+          wait_for() {
+            local name="$1"
+            local url="$2"
+            for i in {1..120}; do
+              if curl -fsS "$url" >/dev/null 2>&1; then
+                echo "$name is ready"
+                return 0
+              fi
+              sleep 2
+            done
+            echo "$name did not become ready: $url"
+            docker compose ps
+            docker compose logs --tail=200
+            return 1
+          }
+
+          wait_for "Recorder" "http://localhost:8090/health"
+          wait_for "Code Generator" "http://localhost:8100/health"
+          wait_for "Runner" "http://localhost:8110/health"
+          wait_for "Control Plane" "http://localhost:8080/api/v1/health"
+          wait_for "Web" "http://localhost:3000/login"
+
+      - name: Show final container status
+        run: docker compose ps
+
+      - name: Build Claude handover source zip
+        shell: bash
+        run: |
+          cat > CLAUDE_HANDOVER.md <<'EOF'
+          # Autonomous QA Execution Agent — Claude Handover
+
+          Repository: Kazihamid/Autonomous_QA_Execution_Agent
+          Branch: chore/fresh-clone-smoke
+          Version: 0.3.2
+
+          ## Start
+          Windows: start Docker Desktop, run START_PROJECT.bat, then open http://localhost:3000.
+
+          ## Stack
+          - Web: Next.js / React / TypeScript
+          - Control Plane: Java / Spring Boot / JPA / Flyway
+          - PostgreSQL
+          - Recorder: Python / FastAPI / Chromium / noVNC
+          - Code Generator: Python / FastAPI
+          - Runner: Python / Playwright / Pytest
+
+          ## Current state
+          - Fresh-clone Docker portability implemented.
+          - .env.runtime bootstraps from .env.runtime.example.
+          - package-lock.json is committed and Web Docker/CI use npm ci.
+          - DB backup/restore scripts are included.
+          - CI covers Web, Control Plane, Recorder, Code Generator, Runner compilation and Compose config.
+          - Full fresh-clone Docker smoke test passes on this branch.
+
+          ## Runtime/data
+          Existing workspaces, applications, environments, scenarios and execution history live in PostgreSQL and are not stored in Git. Use scripts/backup-db.ps1 and scripts/restore-db.ps1 when moving runtime data.
+
+          ## Important application observations
+          - ERP autocomplete fields may require real sequential key events rather than fill().
+          - DataTables employee selections can fail when recorded employee IDs are absent from the current dataset; treat this as a test-data mismatch.
+          - Runtime payload override/editing and live execution visualization were planned but are not yet complete.
+          - Do not invent or submit destructive ERP business data without explicit authorization.
+
+          ## Security
+          This package intentionally excludes real runtime secrets, local DB data, build outputs and runtime artifacts.
+          EOF
+
+          zip -r Autonomous_QA_Execution_Agent_Claude_Handover_0.3.2.zip .             -x ".git/*" ".env" ".env.local" ".env.runtime"                "node_modules/*" "*/node_modules/*"                ".next/*" "*/.next/*"                "target/*" "*/target/*"                "__pycache__/*" "*/__pycache__/*"                ".pytest_cache/*" "*/.pytest_cache/*"                "runtime-artifacts/*" "*/runtime-artifacts/*"                "backups/*" "*/backups/*"                "*.sql" "*.zip"
+
+      - name: Upload Claude handover artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Autonomous_QA_Execution_Agent_Claude_Handover_0.3.2
+          path: Autonomous_QA_Execution_Agent_Claude_Handover_0.3.2.zip
+          if-no-files-found: error
+
+      - name: Tear down smoke-test stack
+        if: always()
+        run: docker compose down -v --remove-orphans
