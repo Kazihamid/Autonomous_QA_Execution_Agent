@@ -110,13 +110,13 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_CONTROL_PLANE_URL: http://${PUBLIC_HOST:-localhost}:8080
+        NEXT_PUBLIC_CONTROL_PLANE_URL: auto
         NEXT_PUBLIC_AUTH_MODE: dev
-        NEXT_PUBLIC_RECORDER_VIEW_URL: "http://${PUBLIC_HOST:-localhost}:6080/vnc.html?autoconnect=1&resize=scale"
+        NEXT_PUBLIC_RECORDER_VIEW_URL: auto
     environment:
-      NEXT_PUBLIC_CONTROL_PLANE_URL: http://${PUBLIC_HOST:-localhost}:8080
+      NEXT_PUBLIC_CONTROL_PLANE_URL: auto
       NEXT_PUBLIC_AUTH_MODE: dev
-      NEXT_PUBLIC_RECORDER_VIEW_URL: "http://${PUBLIC_HOST:-localhost}:6080/vnc.html?autoconnect=1&resize=scale"
+      NEXT_PUBLIC_RECORDER_VIEW_URL: auto
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:3000:3000"
     depends_on:
