@@ -183,6 +183,8 @@ def _date_rule(key, element):
     """(env name, default offset in days, forced) for a date field known by name; the proposal date is today and the last working date is today + 30."""
     text=' '.join([str(key or ''),str(_id_of(element) or ''),str(element.get('description') or '')]).lower()
     text=re.sub(r'[^a-z]','',text)
+    if 'birth' in text or 'dob' in text: return 'BIRTH_DATE_OFFSET_DAYS',-9131,True
+    if 'joining' in text: return 'JOINING_DATE_OFFSET_DAYS',0,True
     if 'proposal' in text: return 'PROPOSAL_DATE_OFFSET_DAYS',0,True
     if 'lastworking' in text: return 'LAST_WORKING_DATE_OFFSET_DAYS',30,True
     return None,30,False
@@ -198,6 +200,13 @@ def _is_browse_element(element: dict[str,Any]) -> bool:
         if (text.startswith('browse') and len(text) < 30) or 'type="file"' in text or '[type=file]' in text or "type='file'" in text:
             return True
     return False
+
+_PIN_MESSAGE=re.compile(r'^\s*New Employee PIN\s*:\s*(\d{4,})\s*$',re.I)
+
+def _pin_message(element):
+    # A recorded click on the confirmation "New Employee PIN: 00304757". The number is new on every run, so it is found by pattern.
+    return any(_PIN_MESSAGE.match(str(c.get('value') or '')) for c in _candidate_list(element) if c.get('strategy')=='text')
+
 
 def _is_toast_element(key, element):
     # A recorded click on a short-lived notification ("... has been saved successfully"), which is gone again by the time the test reaches it.
@@ -958,6 +967,38 @@ def _saved_notice(page):
     return ""
 
 
+_NEW_PIN = {}
+
+
+def _confirm_new_pin(page, seconds=20):
+    # Proof that an employee was created: the page shows "New Employee PIN: <number>". The first call waits for it and remembers the number;
+    # later calls (the same message in a list) look for that number.
+    import re as _re
+    known = _NEW_PIN.get("pin")
+    pattern = _re.compile("New Employee PIN\\s*:\\s*" + (known if known else "(\\d{4,})"))
+    for _ in range(int(seconds * 2)):
+        stop = _duplicate_stop(page)
+        if stop:
+            raise AssertionError(stop[6:] if stop.startswith("STOP: ") else stop)
+        found = page.get_by_text(pattern).filter(visible=True)
+        if found.count() > 0:
+            text = found.first.inner_text()
+            number = _re.search(r"(\d{4,})", text)
+            if number and not known:
+                _NEW_PIN["pin"] = number.group(1)
+                print("[IR-CREATED] the page said: " + " ".join(text.split())[:120] + " (new employee PIN " + number.group(1) + ")", flush=True)
+            try:
+                found.first.click(timeout=2000)
+            except Exception:
+                pass
+            return
+        page.wait_for_timeout(500)
+    msg = ("The page never showed the message New Employee PIN after Save, so the employee was not created. Look at the form: a required field may be "
+           "empty or wrong (for example a date of birth in the future). The failure details below list the form values.")
+    print("[IR-STOP] " + msg, flush=True)
+    raise AssertionError(msg)
+
+
 def _await_saved(page, seconds=8):
     # After the form closed: wait for proof. Returns "" when a confirmation was seen, "STOP: ..." otherwise.
     for _ in range(int(seconds * 2)):
@@ -1319,8 +1360,89 @@ def _click_by_text(page, hint, seconds=4):
     return False
 
 
-def _click(page, loc, timeout=5000, hint=""):
+def _open_entry(page, loc, hint, arrow):
+    # A drop-down opened by its arrow: the entry to click must be on screen before it is clicked. If it is not, the arrow is pressed again
+    # (the first press may only have closed another list), then the first word of the entry is typed into the field's own box. When the
+    # entry still does not show, the run stops here with the reason, instead of clicking an element nobody can see.
+    shown = loc.filter(visible=True).first
+
+    def wait(ms):
+        try:
+            shown.wait_for(state="visible", timeout=ms)
+            return True
+        except Exception:
+            return False
+
+    if wait(4000):
+        return
+    try:
+        page.locator('[id="' + arrow + '"]').filter(visible=True).first.click(timeout=3000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1000)
+    if wait(5000):
+        return
+    words = re.sub(r"^\d*\[[^\]]*\]\s*-?\s*", "", str(hint or "")).strip().split(" ")[0]
+    if words:
+        box = page.locator('[id="' + re.sub(r"_arrow$", "_input", arrow) + '"]').filter(visible=True).first
+        try:
+            box.click(timeout=3000)
+            box.fill("")
+            box.press_sequentially(words, delay=150)
+        except Exception:
+            pass
+        if wait(6000):
+            print("[IR-CHOICE] the list was opened by typing '" + words + "' (the arrow alone did not show it)", flush=True)
+            return
+    raise AssertionError("The list entry '" + str(hint) + "' did not appear after opening the list (" + arrow + "). The list may depend on a field filled earlier, or the page may be slow.")
+
+
+def _entry_taken(page, arrow, entry_id):
+    # After an entry was clicked: did the field really take it? These lists keep the chosen id in a hidden box next to the visible one
+    # (x_arrow, x_input, x_hidden); typing text copies the text, not the id, into it. Without that box the visible field must not be empty.
+    base = re.sub(r"_arrow$", "", arrow)
+    try:
+        hidden = page.locator('[id="' + base + '_hidden"]')
+        if hidden.count() > 0 and entry_id:
+            return hidden.first.input_value().strip() == str(entry_id)
+        shown = page.locator('[id="' + base + '_input"]').filter(visible=True)
+        if shown.count() > 0:
+            return bool(shown.first.input_value().strip())
+    except Exception:
+        pass
+    return True
+
+
+def _choose_entry(page, loc, hint, arrow, timeout=5000):
+    # Open the list, click the entry, and check that the field took it; if not, open the list again and retry (three tries).
+    for attempt in range(3):
+        _open_entry(page, loc, hint, arrow)
+        entry = loc.filter(visible=True).first
+        try:
+            entry_id = entry.get_attribute("id", timeout=2000)
+        except Exception:
+            entry_id = ""
+        try:
+            entry.click(timeout=timeout)
+        except Exception:
+            entry.dispatch_event("click", timeout=3000)
+        page.wait_for_timeout(800)
+        if _entry_taken(page, arrow, entry_id):
+            return
+        print("[IR-RETRY] the field did not take '" + str(hint) + "' (try " + str(attempt + 1) + " of 3); opening the list again", flush=True)
+        try:
+            page.locator('[id="' + arrow + '"]').filter(visible=True).first.click(timeout=3000)
+        except Exception:
+            pass
+        page.wait_for_timeout(800)
+    raise AssertionError("Choosing '" + str(hint) + "' did not fill the field (" + arrow + ") after 3 tries. The page may need another field filled first, for example a country before a division.")
+
+
+def _click(page, loc, timeout=5000, hint="", arrow=""):
     # A normal click, except that a radio button is checked afterwards to make sure it really got selected.
+    if arrow:
+        _choose_entry(page, loc, hint, arrow, timeout)
+        return
     el = loc.first
     try:
         el.wait_for(state="attached", timeout=timeout)
@@ -1901,6 +2023,8 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append('        _quiet(page)')
                     lines.append('    except Exception:')
                     lines.append(f'        print({_json("[IR-SKIP] "+sid+": the button ("+str(key)+") was already used to save the record, and it is not on this page; the record was saved before this step.")}, flush=True)')
+                elif key and _pin_message(element):
+                    lines.append('    _confirm_new_pin(page)')
                 elif key and _is_toast_element(key, element):
                     lines.append('    try:')
                     lines.append(f'        {loc}.first.click(timeout=2000)')
@@ -1919,7 +2043,11 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                 else:
                     lines.append('    try:')
                     _hint=next((str(c.get('value')) for c in _candidate_list(element) if c.get('strategy')=='text' and c.get('value')),'')
-                    lines.append(f'        _click(page, {loc}, hint={_json(_hint)})' if _hint else f'        _click(page, {loc})')
+                    _prev=ordered_steps[step_index-1] if step_index>0 else {}
+                    _prev_ids=[str(c.get('value') or '') for c in _candidate_list(elements.get(str(_prev.get('element'))) or {}) if c.get('strategy')=='id']
+                    _arrow=next((i for i in _prev_ids if i.endswith('_arrow')),'') if _prev.get('action')=='click' else ''
+                    _extra=f', arrow={_json(_arrow)}' if _arrow else ''
+                    lines.append(f'        _click(page, {loc}, hint={_json(_hint)}{_extra})' if _hint else f'        _click(page, {loc}{_extra})')
                     lines.append('    except AssertionError:')
                     lines.append('        raise')
                     lines.append('    except Exception:')
