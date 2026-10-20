@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo-dark.svg" alt="Autonomous QA Execution Agent" width="520"></p>
+
 # Autonomous QA Execution Agent
 
 Docker-first, AI-assisted QA automation platform for recording browser workflows, generating reusable Automation IR, producing runnable test code, and executing scenarios from a central repository.

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 280" width="880" height="280">
+<rect width="880" height="280" fill="#0B1220"/>
+<g transform="translate(12,12) scale(1)">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4F46E5"/><stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#A5F3FC"/><stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+    <linearGradient id="ok" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6EE7B7"/><stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- loop of autonomous runs: two arcs with arrow heads -->
+  <g fill="none" stroke="url(#ring)" stroke-width="14" stroke-linecap="round">
+    <path d="M62 120 A66 66 0 0 1 176 74"/>
+    <path d="M194 136 A66 66 0 0 1 80 182"/>
+  </g>
+  <path d="M164 48 L196 70 L160 92 Z" fill="#fff"/>
+  <path d="M92 208 L60 186 L96 164 Z" fill="#fff"/>
+  <!-- the verified check -->
+  <circle cx="128" cy="128" r="38" fill="#0B1220" opacity=".35"/>
+  <circle cx="128" cy="128" r="34" fill="url(#ok)"/>
+  <path d="M111 129 L123 141 L146 116" fill="none" stroke="#06281E" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="290" y="128" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="64" font-weight="800" fill="#FFFFFF" letter-spacing="-1">Autonomous QA</text>
+<text x="292" y="190" font-family="Inter,Segoe UI,Helvetica,Arial,sans-serif" font-size="40" font-weight="500" fill="#94A3B8" letter-spacing="6">EXECUTION AGENT</text>
+</svg>
