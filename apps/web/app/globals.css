@@ -4,8 +4,9 @@ body { margin:0; background:var(--bg); color:var(--ink); font-family:Arial, Helv
 a { color:inherit; text-decoration:none; }
 button,input,textarea,select { font:inherit; }
 .shell { min-height:100vh; }
-.topbar { background:#0d2f4f; color:white; padding:14px 24px; display:flex; align-items:center; justify-content:space-between; gap:20px; }
-.brand { font-weight:700; letter-spacing:.2px; }
+.topbar { background:#0d2f4f; color:white; padding:8px 24px; display:flex; align-items:center; justify-content:space-between; gap:20px; }
+.brand { display:flex; align-items:center; font-weight:700; letter-spacing:.2px; }
+.brand svg { max-width:60vw; height:auto; }
 .identity { font-size:13px; opacity:.9; }
 main { max-width:1440px; margin:0 auto; padding:28px 22px 60px; }
 .hero { display:flex; justify-content:space-between; gap:24px; align-items:flex-end; margin-bottom:22px; }
