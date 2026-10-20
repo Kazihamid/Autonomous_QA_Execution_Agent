@@ -844,3 +844,85 @@ def test_type_ahead_waits_for_a_slow_suggestion_list_and_stops_when_none_comes(t
             ns["_type_ahead"](page, page.locator("#who"), "99999999", seconds=1)
         assert "No suggestion appeared for '99999999'" in str(why.value)
         browser.close()
+
+
+def test_open_entry_presses_the_arrow_again_then_types_and_finally_stops(tmp_path, monkeypatch):
+    import pytest
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    # the arrow works only on its second press
+    second = ("<html><body><input id='x_input'><button id='x_arrow'>v</button><div id=list style='display:none'><div id='4'>[30] Dhaka</div></div>"
+              "<div style='display:none'><div id='4'>hidden copy</div></div><script>let n=0;x_arrow.onclick=()=>{n++;if(n>=2)list.style.display='block'}</script></body></html>")
+    # the arrow never works, typing does
+    typing = ("<html><body><input id='x_input'><button id='x_arrow'>v</button><div id=list style='display:none'><div id='4'>[30] Dhaka</div></div>"
+              "<script>x_input.addEventListener('keyup',()=>{list.style.display='block'})</script></body></html>")
+    never = "<html><body><input id='x_input'><button id='x_arrow'>v</button></body></html>"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        monkeypatch.setattr(page, "wait_for_timeout", lambda ms: None.__class__ and page.evaluate("ms => new Promise(r => setTimeout(r, Math.min(ms, 300)))", ms))
+        for html in (second, typing):
+            page.set_content(html)
+            page.locator("#x_arrow").click()
+            ns["_open_entry"](page, page.locator('[id="4"]'), "4[30] Dhaka", "x_arrow")
+            assert page.locator('[id="4"]').filter(visible=True).count() == 1
+        page.set_content(never)
+        with pytest.raises(AssertionError) as why:
+            ns["_open_entry"](page, page.locator('[id="4"]'), "4[30] Dhaka", "x_arrow")
+        assert "did not appear after opening the list" in str(why.value)
+        browser.close()
+
+
+def test_choose_entry_retries_until_the_field_really_holds_the_choice(tmp_path, monkeypatch):
+    import pytest
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    # the first click on the entry is lost (the hidden id stays empty); the second one is kept
+    html = ("<html><body><input id='x_input'><input id='x_hidden' type='hidden'><button id='x_arrow'>v</button>"
+            "<div id=list><div id='4'>[30] Dhaka</div></div><script>let c=0;"
+            "document.getElementById('4').onclick=()=>{c++;if(c>=2){x_hidden.value='4';x_input.value='[30] Dhaka'}};</script></body></html>")
+    never = html.replace("if(c>=2)", "if(false)")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        ns["_click"](page, page.locator('[id="4"]'), hint="4[30] Dhaka", arrow="x_arrow")
+        assert page.locator("#x_hidden").input_value() == "4"
+        page.set_content(never)
+        with pytest.raises(AssertionError) as why:
+            ns["_click"](page, page.locator('[id="4"]'), hint="4[30] Dhaka", arrow="x_arrow")
+        assert "did not fill the field" in str(why.value)
+        browser.close()
+
+
+def test_birth_and_joining_dates_are_not_pushed_into_the_future():
+    from app.generator import core
+    assert core._date_rule("employeedob", {"candidates": []})[0] == "BIRTH_DATE_OFFSET_DAYS"
+    assert core._date_rule("employeedob", {"candidates": []})[1] < -6000
+    assert core._date_rule("joiningdate", {"candidates": []})[1] == 0
+    assert core._date_rule("proposal-date", {"candidates": []})[0] == "PROPOSAL_DATE_OFFSET_DAYS"
+
+
+def test_confirm_new_pin_waits_for_the_message_and_fails_without_it(tmp_path, monkeypatch):
+    import pytest
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content("<div id=m style='display:none'>New Employee PIN: 00304999</div><script>setTimeout(()=>m.style.display='block',800)</script>")
+        ns["_confirm_new_pin"](page, 6)
+        assert ns["_NEW_PIN"]["pin"] == "00304999"
+        ns["_NEW_PIN"].clear()
+        page.set_content("<div>nothing here</div>")
+        with pytest.raises(AssertionError) as why:
+            ns["_confirm_new_pin"](page, 2)
+        assert "never showed" in str(why.value)
+        browser.close()
+
+
+def test_pin_message_text_is_matched_by_pattern_not_the_recorded_number():
+    from app.generator import core
+    el = {"preferred": {"strategy": "text", "value": "New Employee PIN: 00304756"}}
+    assert core._pin_message(el)
+    assert not core._pin_message({"preferred": {"strategy": "text", "value": "Save"}})
