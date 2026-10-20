@@ -699,7 +699,7 @@ def test_cheque_stays_selected_when_the_page_switches_back_to_beftn_twice(tmp_pa
 
 
 def test_duplicate_notice_stops_the_run_even_in_an_unrecognised_toast(tmp_path, monkeypatch):
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     ns["_note_employee_key"]("00068979")
     html = ("<html><body><form><input type=button value=Create></form>"
@@ -721,7 +721,7 @@ def test_duplicate_notice_stops_the_run_even_in_an_unrecognised_toast(tmp_path, 
 
 
 def test_closed_form_without_a_confirmation_is_not_a_pass(tmp_path, monkeypatch):
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -768,7 +768,7 @@ def test_ids_that_are_not_valid_css_names_use_an_attribute_selector():
 
 
 def test_click_by_text_finds_a_list_entry_whose_recorded_id_is_not_on_the_page(tmp_path, monkeypatch):
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     html = ("<html><body><input id=box><div id=list></div><div id=out></div><script>"
             "box.addEventListener('keyup',()=>{list.innerHTML='<div class=item id=row9 onclick=\"out.textContent=\\'picked\\'\">[30] Dhaka</div>'});"
@@ -811,7 +811,7 @@ def test_locators_try_every_recorded_way_and_demote_generated_ids():
 
 
 def test_resolve_prefers_the_visible_match_and_ignores_hidden_duplicates():
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     from app.generator.core import _RESOLVE_HELPER
     ns={}
     exec(_RESOLVE_HELPER, ns)
@@ -828,7 +828,7 @@ def test_resolve_prefers_the_visible_match_and_ignores_hidden_duplicates():
 
 def test_type_ahead_waits_for_a_slow_suggestion_list_and_stops_when_none_comes(tmp_path, monkeypatch):
     import pytest
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     slow = ("<html><body><input id=who><ul class='ui-autocomplete' style='display:none'><li class='ui-menu-item'>A Z M MASUD ALAM [00013698]</li></ul><script>"
             "who.addEventListener('keyup',()=>{ if(who.value==='00040152'){ clearTimeout(window.t); window.t=setTimeout(()=>{document.querySelector('.ui-autocomplete').style.display='block'},2500)} });"
@@ -848,7 +848,7 @@ def test_type_ahead_waits_for_a_slow_suggestion_list_and_stops_when_none_comes(t
 
 def test_open_entry_presses_the_arrow_again_then_types_and_finally_stops(tmp_path, monkeypatch):
     import pytest
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     # the arrow works only on its second press
     second = ("<html><body><input id='x_input'><button id='x_arrow'>v</button><div id=list style='display:none'><div id='4'>[30] Dhaka</div></div>"
@@ -875,7 +875,7 @@ def test_open_entry_presses_the_arrow_again_then_types_and_finally_stops(tmp_pat
 
 def test_choose_entry_retries_until_the_field_really_holds_the_choice(tmp_path, monkeypatch):
     import pytest
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     # the first click on the entry is lost (the hidden id stays empty); the second one is kept
     html = ("<html><body><input id='x_input'><input id='x_hidden' type='hidden'><button id='x_arrow'>v</button>"
@@ -905,7 +905,7 @@ def test_birth_and_joining_dates_are_not_pushed_into_the_future():
 
 def test_confirm_new_pin_waits_for_the_message_and_fails_without_it(tmp_path, monkeypatch):
     import pytest
-    from playwright.sync_api import sync_playwright
+    sync_playwright = __import__("pytest").importorskip("playwright.sync_api").sync_playwright
     ns = _pin_namespace(tmp_path, monkeypatch, {})
     with sync_playwright() as p:
         browser = p.chromium.launch()
