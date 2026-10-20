@@ -236,7 +236,7 @@ def test_click_on_an_empty_date_field_sets_a_future_date():
 
 def test_missing_button_fails_instead_of_opening_another_page_but_links_still_fall_back():
     button = _test_source(_date_ir(yes_role="button")).split("# IR-STEP: step-006")[1]
-    assert 'page.goto(_join_url(base_url, "/list"))' not in button and "dispatch_event" in button
+    assert 'page.goto(_join_url(base_url, "/list"))' not in button and "_force_click" in button
     link = _test_source(_date_ir(yes_role="link")).split("# IR-STEP: step-006")[1]
     assert 'page.goto(_join_url(base_url, "/list"))' in link
 
@@ -696,3 +696,151 @@ def test_cheque_stays_selected_when_the_page_switches_back_to_beftn_twice(tmp_pa
     assert out == (False, True)
     # one remembered choice for the group, and it is Cheque
     assert len(core["_CHOSEN"]) == 1
+
+
+def test_duplicate_notice_stops_the_run_even_in_an_unrecognised_toast(tmp_path, monkeypatch):
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    ns["_note_employee_key"]("00068979")
+    html = ("<html><body><form><input type=button value=Create></form>"
+            "<div class='weird-toast' style='background:pink'><b>Employee Detail Information</b>"
+            "<p>Job Separation Proposal Already Exists</p></div></body></html>")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        stop = ns["_duplicate_stop"](page)
+        assert stop.startswith("STOP: ") and "00068979" in stop and "already exists" in stop.lower()
+        assert ns["_creation_problem"](page, seconds=3).startswith("STOP: ")
+        monkeypatch.setenv("STOP_ON_DUPLICATE", "off")
+        assert ns["_duplicate_stop"](page) == ""
+        page.set_content("<html><body><p>Saved successfully</p></body></html>")
+        monkeypatch.delenv("STOP_ON_DUPLICATE")
+        assert ns["_duplicate_stop"](page) == ""
+        browser.close()
+
+
+def test_closed_form_without_a_confirmation_is_not_a_pass(tmp_path, monkeypatch):
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content("<html><body><p>Proposal list</p></body></html>")
+        stop = ns["_await_saved"](page, seconds=1)
+        assert stop.startswith("STOP: ") and "no confirmation" in stop
+        monkeypatch.setenv("ACCEPT_SAVE_WITHOUT_MESSAGE", "on")
+        assert ns["_await_saved"](page, seconds=1) == ""
+        monkeypatch.delenv("ACCEPT_SAVE_WITHOUT_MESSAGE")
+        page.set_content("<html><body><div class='x-toast'>Proposal saved successfully</div></body></html>")
+        assert ns["_await_saved"](page, seconds=1) == ""
+        page.set_content("<html><body><div class='x-toast'>Job Separation Proposal Already Exists</div></body></html>")
+        assert ns["_await_saved"](page, seconds=1).startswith("STOP: ")
+        browser.close()
+
+
+def test_fill_steps_use_the_visible_match_when_a_recorded_name_matches_many_inputs():
+    out=generate_project(req("PLAYWRIGHT_PYTEST"))
+    source='\n'.join(x['content'] for x in out['files'] if x['path'].startswith('tests/test_'))
+    assert '.filter(visible=True).first' in source
+    assert '.filter(visible=True).first.wait_for(state="visible"' in source
+
+
+def test_choices_dropdown_helpers_match_by_value_then_text(tmp_path, monkeypatch):
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    rows = [["1", "BRAC Education"], ["2", "BRAC Health"]]
+    assert ns["_choice_index"](rows, "2") == 1
+    assert ns["_choice_index"](rows, "brac education") == 0
+    assert ns["_choice_index"](rows, "health") == 1
+    assert ns["_choice_index"](rows, "zzz") is None
+
+
+def test_text_fields_are_typed_through_fill_text():
+    out=generate_project(req("PLAYWRIGHT_PYTEST"))
+    source='\n'.join(x['content'] for x in out['files'] if x['path'].startswith('tests/test_'))
+    assert '_fill_text(' in source
+
+
+def test_ids_that_are_not_valid_css_names_use_an_attribute_selector():
+    from app.generator.core import _pw_locator
+    assert _pw_locator({"preferred":{"strategy":"id","value":"4"}}) == 'self.page.locator("[id=\\"4\\"]")'
+    assert _pw_locator({"preferred":{"strategy":"id","value":"employee-name"}}) == 'self.page.locator("#employee-name")'
+
+
+def test_click_by_text_finds_a_list_entry_whose_recorded_id_is_not_on_the_page(tmp_path, monkeypatch):
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    html = ("<html><body><input id=box><div id=list></div><div id=out></div><script>"
+            "box.addEventListener('keyup',()=>{list.innerHTML='<div class=item id=row9 onclick=\"out.textContent=\\'picked\\'\">[30] Dhaka</div>'});"
+            "</script></body></html>")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(html)
+        page.locator("#box").fill("dha")
+        assert page.locator(".item").count() == 0
+        page.locator("#box").fill("")
+        page.locator("#box").press_sequentially("dha", delay=20)
+        assert ns["_click_by_text"](page, "4[30] Dhaka", seconds=2) is True
+        assert page.locator("#out").inner_text() == "picked"
+        assert ns["_click_by_text"](page, "[99] Nowhere", seconds=1) is False
+        browser.close()
+
+
+def test_fill_followed_by_a_list_entry_click_is_typed_key_by_key():
+    ir=json.loads(json.dumps(IR))
+    ir['elements']['entry']={'preferred':{'strategy':'id','value':'4'},'alternatives':[{'strategy':'text','value':'4[30] Dhaka'}]}
+    ir['steps']=ir['steps'][:2]+[{'id':'step-003','action':'click','element':'entry'}]
+    r=req('PLAYWRIGHT_PYTEST'); r['automationIr']=ir
+    source='\n'.join(x['content'] for x in generate_project(r)['files'] if x['path'].startswith('tests/test_'))
+    assert 'press_sequentially(_setting("username"), delay=150)' in source
+    everything='\n'.join(x['content'] for x in generate_project(r)['files'])
+    assert 'locator("[id=' in everything
+
+
+def test_locators_try_every_recorded_way_and_demote_generated_ids():
+    from app.generator.core import _pw_locator, _is_dynamic_id
+    assert _is_dynamic_id("4") and _is_dynamic_id("ui-id-12") and _is_dynamic_id("row-123456") and not _is_dynamic_id("divisionIdDiv_input")
+    element={"preferred":{"strategy":"id","value":"4"},"alternatives":[{"strategy":"text","value":"[30] Dhaka"},{"strategy":"css","value":"#4"},{"strategy":"xpath","value":"//li[3]"}]}
+    expr=_pw_locator(element)
+    assert expr.startswith("_resolve(self.page, [")
+    assert expr.index("get_by_text") < expr.index("[id=")      # the text is tried before the number-like id
+    assert '"#4"' not in expr                                 # a css path that only repeats that id is dropped
+    stable={"preferred":{"strategy":"id","value":"employee-name"},"alternatives":[]}
+    assert _pw_locator(stable)=='self.page.locator("#employee-name")'
+
+
+def test_resolve_prefers_the_visible_match_and_ignores_hidden_duplicates():
+    from playwright.sync_api import sync_playwright
+    from app.generator.core import _RESOLVE_HELPER
+    ns={}
+    exec(_RESOLVE_HELPER, ns)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content("<div style='display:none'><span id='4'>hidden one</span></div><div><span id='4'>visible one</span></div>")
+        found = ns["_resolve"](page, [page.locator('[id="4"]'), page.get_by_text("nothing")], wait_ms=400)
+        assert found.count() == 1 and found.inner_text() == "visible one"
+        page.set_content("<div style='display:none'><span id='4'>hidden</span></div>")
+        assert ns["_resolve"](page, [page.locator('[id="4"]')], wait_ms=300).count() == 1
+        browser.close()
+
+
+def test_type_ahead_waits_for_a_slow_suggestion_list_and_stops_when_none_comes(tmp_path, monkeypatch):
+    import pytest
+    from playwright.sync_api import sync_playwright
+    ns = _pin_namespace(tmp_path, monkeypatch, {})
+    slow = ("<html><body><input id=who><ul class='ui-autocomplete' style='display:none'><li class='ui-menu-item'>A Z M MASUD ALAM [00013698]</li></ul><script>"
+            "who.addEventListener('keyup',()=>{ if(who.value==='00040152'){ clearTimeout(window.t); window.t=setTimeout(()=>{document.querySelector('.ui-autocomplete').style.display='block'},2500)} });"
+            "</script></body></html>")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.set_content(slow)
+        ns["_type_ahead"](page, page.locator("#who"), "00040152", seconds=6)
+        assert page.locator(".ui-autocomplete .ui-menu-item").is_visible()
+        page.set_content("<html><body><input id=who></body></html>")
+        with pytest.raises(AssertionError) as why:
+            ns["_type_ahead"](page, page.locator("#who"), "99999999", seconds=1)
+        assert "No suggestion appeared for '99999999'" in str(why.value)
+        browser.close()

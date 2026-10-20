@@ -63,7 +63,8 @@ function ScenarioRepository(){
     });
     return out;
   },[items]);
-  const ordered=useMemo(()=>groups.flatMap(m=>m.features.flatMap(f=>f.items)),[groups]);
+  // The run order is one sequence over every scenario (so a scenario can move past others in other features or modules); the grouping is only how the list is shown.
+  const ordered=items;
   const position=useMemo(()=>{const p:Record<string,number>={};ordered.forEach((x,i)=>{p[x.id]=i+1});return p},[ordered]);
   const selectedIds=useMemo(()=>ordered.filter(x=>selected.has(x.id)).map(x=>x.id),[ordered,selected]);
   const locatorError=error.includes("UNSUPPORTED_LOCATOR")||error.includes("LOCATOR_REQUIRED");
@@ -78,12 +79,9 @@ function ScenarioRepository(){
   function setGroup(list:Scenario[],on:boolean){setSelected(prev=>{const n=new Set(prev);list.forEach(x=>on?n.add(x.id):n.delete(x.id));return n})}
 
   async function move(id:string,delta:number){
-    const feature=groups.flatMap(m=>m.features).find(f=>f.items.some(x=>x.id===id));
-    if(!feature)return;
-    const i=feature.items.findIndex(x=>x.id===id);const j=i+delta;
-    if(j<0||j>=feature.items.length)return;
-    const swapped=[...feature.items];[swapped[i],swapped[j]]=[swapped[j],swapped[i]];
-    const next=groups.flatMap(m=>m.features.flatMap(f=>f===feature?swapped:f.items));
+    const i=items.findIndex(x=>x.id===id);const j=i+delta;
+    if(i<0||j<0||j>=items.length)return;
+    const next=[...items];[next[i],next[j]]=[next[j],next[i]];
     setItems(next);
     try{setBusy("reorder");setError("");setItems(await api<Scenario[]>(`${base}/scenarios/order`,{method:"PUT",body:JSON.stringify({scenarioIds:next.map(x=>x.id)})}))}
     catch(e){setError((e as Error).message);await load()}finally{setBusy("")}
@@ -167,7 +165,7 @@ function ScenarioRepository(){
           <button className="export-btn" onClick={exportSelected} disabled={!selectedIds.length||busy==="export"} title="Downloads the selected scenarios as one project that runs from VS Code">{busy==="export"?"Exporting…":"Export as Project"}</button>
         </div>
       </div>
-      <p className="muted small-note">Scenarios are grouped by module and feature. They run one after another in the # order shown below (▲▼ change the order inside a feature). The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
+      <p className="muted small-note">Scenarios are grouped by module and feature. They run one after another in the # order shown below. ▲▼ move a scenario earlier or later in that run order, even past scenarios in other features or modules. The test is generated fresh from the saved Automation IR and its login URL is pointed at the environment you choose, so the same scenario can be run on any environment.</p>
     </section>
 
     {job&&<RunPanel job={job}/>}
@@ -194,13 +192,13 @@ function ScenarioRepository(){
               </div>
               <div style={{overflowX:"auto"}}>
                 <table className="table scenario-table">
-                  <thead><tr><th></th><th>#</th><th>Scenario</th><th>Status</th><th>Version</th><th>Last run</th><th>Actions</th></tr></thead>
+                  <thead><tr><th></th><th title="Run order">#</th><th>Scenario</th><th>Status</th><th>Version</th><th>Last run</th><th>Actions</th></tr></thead>
                   <tbody>{f.items.map((s,idx)=>{
                     const rr=lastStatus[s.id];
                     const live=job?.items.find(x=>x.scenarioId===s.id);
                     return <tr key={s.id}>
                       <td><input type="checkbox" checked={selected.has(s.id)} onChange={()=>toggle(s.id)} aria-label={`Select ${s.name}`}/></td>
-                      <td style={{whiteSpace:"nowrap"}}>{position[s.id]} <button className="secondary compact" onClick={()=>move(s.id,-1)} disabled={idx===0||busy==="reorder"||running} aria-label="Move up">▲</button> <button className="secondary compact" onClick={()=>move(s.id,1)} disabled={idx===f.items.length-1||busy==="reorder"||running} aria-label="Move down">▼</button></td>
+                      <td style={{whiteSpace:"nowrap"}}>{position[s.id]} <button className="secondary compact" onClick={()=>move(s.id,-1)} disabled={position[s.id]===1||busy==="reorder"||running} aria-label="Move up">▲</button> <button className="secondary compact" onClick={()=>move(s.id,1)} disabled={position[s.id]===items.length||busy==="reorder"||running} aria-label="Move down">▼</button></td>
                       <td><Link className="table-link" href={scenarioHref(s.id)}>{s.name}</Link>{isDup(s)&&<span className="badge warn" style={{marginLeft:8}} title="Another scenario has the same module, feature and name. Delete the extra one.">Duplicate</span>}</td>
                       <td><span className="badge ok">{s.status}</span></td>
                       <td>v{s.currentVersion}</td>

@@ -70,6 +70,15 @@ export default function EditScenario(){
   }
 
   const back=`/workspaces/${workspaceId}/applications/${applicationId}/scenarios`;
+  async function remove(){
+    const label=d?.scenario.name??"this scenario";
+    if(!window.confirm(`Delete scenario "${label}"? It is moved to "Recently deleted" and can be restored from Recovery & Backup on the scenario list.`))return;
+    try{
+      setBusy("delete");setError("");
+      await api(`${base}/scenarios/${scenarioId}`,{method:"DELETE"});
+      router.push(back);
+    }catch(e){setError((e as Error).message);setBusy("")}
+  }
   return <AppShell>
     <div className="breadcrumb"><Link href={back}>Scenario repository</Link><span>/</span><span>{d?.scenario.name??"Scenario"}</span><span>/</span><span>Edit</span></div>
     {error&&<div className="error" style={{marginBottom:12}}>{error}</div>}
@@ -107,6 +116,7 @@ export default function EditScenario(){
         <button onClick={update} disabled={!!busy||!name.trim()||nothingChanged} title="Save changes to this scenario as a new version">{busy==="update"?"Updating…":"Update scenario"}</button>
         <button className="secondary" onClick={saveAsNew} disabled={!!busy||!name.trim()} title={unchangedName?"The name will get a (copy) suffix":"Create a separate scenario"}>{busy==="new"?"Saving…":"Save as new scenario"}</button>
         <Link className="button secondary" href={back}>Cancel</Link>
+        <button className="danger" onClick={remove} disabled={!!busy} title="Move this scenario to Recently deleted (it can be restored)">{busy==="delete"?"Deleting…":"Delete scenario"}</button>
         <span className="muted small-note" style={{margin:0}}>{nothingChanged?"No changes yet":`${Object.keys(changedParams).length} parameter change(s), ${Object.keys(changedSecrets).length} secret rename(s)${unchangedName?"":", name/module/feature changed"}`}</span>
       </div>
     </>}
