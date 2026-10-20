@@ -67,6 +67,70 @@ def _candidate_list(element: dict[str,Any]) -> list[dict[str,Any]]:
             vals.append({'strategy':'text','value':desc,'fallback':True})
     return vals
 
+_DYNAMIC_ID=re.compile(r'^\d+$|\d{4,}|^(ui-id-|ember|react-|rc[-_]|:r[0-9a-z]+:|select2-.*-result-)|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}',re.I)
+
+_RESOLVE_HELPER = '''def _resolve(page, candidates, wait_ms=1200):
+    # An element is recorded in several ways (id, name, text, css, xpath). The first way that finds a VISIBLE element on the page now is
+    # used, so an id or path that changed since the recording does not stop the run. Hidden duplicates are ignored. When nothing is visible
+    # yet (the element is still to appear, or is hidden by design) the most stable way is returned, and the caller's own wait applies.
+    waited = 0
+    while True:
+        for candidate in candidates:
+            try:
+                visible = candidate.filter(visible=True)
+                if visible.count() > 0:
+                    return visible
+            except Exception:
+                continue
+        if waited >= wait_ms:
+            break
+        page.wait_for_timeout(200)
+        waited += 200
+    return candidates[0]'''
+
+def _is_dynamic_id(value: Any) -> bool:
+    """An id made of digits, a long number or a generated prefix is data or a counter, not a name: it can point at a different element on the next run."""
+    return bool(_DYNAMIC_ID.search(str(value or '')))
+
+def _pw_expr(loc: dict[str,Any], owner='self.page') -> str:
+    s,v=loc.get('strategy'),loc.get('value')
+    if s=='testId': return f'{owner}.get_by_test_id({_json(v)})'
+    if s=='role':
+        if isinstance(v,dict): return f'{owner}.get_by_role({_json(v.get("role",""))}, name={_json(v.get("name",""))})'
+        return f'{owner}.get_by_role({_json(v)})'
+    if s=='label': return f'{owner}.get_by_label({_json(v)})'
+    if s=='placeholder': return f'{owner}.get_by_placeholder({_json(v)})'
+    if s=='text': return f'{owner}.get_by_text({_json(v)}, exact=True)'
+    if s=='id':
+        # An id such as "4" or "a:b" is not a valid #id selector, so it is matched as an attribute instead.
+        if re.fullmatch(r'-?[A-Za-z_][A-Za-z0-9_-]*',str(v)): return f'{owner}.locator({_json("#"+str(v))})'
+        return f'{owner}.locator({_json("[id="+json.dumps(str(v))+"]")})'
+    if s=='name': return f'{owner}.locator({_json("[name="+json.dumps(str(v))+"]")})'
+    if s=='css': return f'{owner}.locator({_json(v)})'
+    if s=='xpath': return f'{owner}.locator({_json("xpath="+str(v))})'
+    raise GeneratorError(f'Unsupported Playwright locator strategy: {s}', 'UNSUPPORTED_LOCATOR', [str(s)])
+
+def _ordered_candidates(element: dict[str,Any]) -> list[dict[str,Any]]:
+    """Every recorded way to find the element, most stable first. Ids that look generated (4, 1234, ui-id-7) are tried after the
+    other attributes and the visible text, and a css/xpath path that only repeats such an id is left out."""
+    locs=_candidate_list(element)
+    order=('testId','id','name','label','placeholder','role','text','css','xpath')
+    out=[]; seen=set()
+    dynamic=[]
+    for strategy in order:
+        for x in locs:
+            if x.get('strategy')!=strategy or x.get('value') in (None,''): continue
+            if strategy=='id' and _is_dynamic_id(x.get('value')):
+                dynamic.append(x); continue
+            if strategy=='css' and any(('#'+str(d.get('value')) in str(x.get('value'))) or ('#\\3' in str(x.get('value'))) for d in locs if d.get('strategy')=='id' and _is_dynamic_id(d.get('value'))): continue
+            key=(strategy,json.dumps(x.get('value'),sort_keys=True))
+            if key in seen: continue
+            seen.add(key); out.append(x)
+    for x in dynamic:
+        key=('id',json.dumps(x.get('value'),sort_keys=True))
+        if key not in seen: seen.add(key); out.append(x)
+    return out
+
 def _pw_locator(element: dict[str,Any], owner='self.page') -> str:
     locs=_candidate_list(element)
     # jQuery UI assigns #ui-active-menuitem dynamically to the currently
@@ -78,26 +142,14 @@ def _pw_locator(element: dict[str,Any], owner='self.page') -> str:
         return f'{owner}.locator(".ui-autocomplete:visible .ui-menu-item, .ui-menu:visible .ui-menu-item")'
     # Prefer stable DOM attributes before accessible text/role. ERP pages can
     # render accessible names late while id/name are immediately available.
-    order=('testId','id','name','label','placeholder','role','text','css','xpath')
-    loc=None
-    for strategy in order:
-        loc=next((x for x in locs if x.get('strategy')==strategy),None)
-        if loc: break
-    if not loc:
+    ordered=_ordered_candidates(element)
+    if not ordered:
         raise GeneratorError('No Playwright-compatible locator was found.', 'UNSUPPORTED_LOCATOR')
-    s,v=loc.get('strategy'),loc.get('value')
-    if s=='testId': return f'{owner}.get_by_test_id({_json(v)})'
-    if s=='role':
-        if isinstance(v,dict): return f'{owner}.get_by_role({_json(v.get("role",""))}, name={_json(v.get("name",""))})'
-        return f'{owner}.get_by_role({_json(v)})'
-    if s=='label': return f'{owner}.get_by_label({_json(v)})'
-    if s=='placeholder': return f'{owner}.get_by_placeholder({_json(v)})'
-    if s=='text': return f'{owner}.get_by_text({_json(v)}, exact=True)'
-    if s=='id': return f'{owner}.locator({_json("#"+str(v))})'
-    if s=='name': return f'{owner}.locator({_json("[name="+json.dumps(str(v))+"]")})'
-    if s=='css': return f'{owner}.locator({_json(v)})'
-    if s=='xpath': return f'{owner}.locator({_json("xpath="+str(v))})'
-    raise GeneratorError(f'Unsupported Playwright locator strategy: {s}', 'UNSUPPORTED_LOCATOR', [str(s)])
+    exprs=list(dict.fromkeys(_pw_expr(x,owner) for x in ordered))
+    if len(exprs)==1 or 'ui-active-menuitem' in transient_ids:
+        return exprs[0]
+    # Several recorded ways to find it: the one that is on screen when the step runs is used, so a changed id or path does not stop the run.
+    return f'_resolve({owner}, [{", ".join(exprs)}])'
 
 def _has_locator(element: dict[str,Any]) -> bool:
     return bool(_candidate_list(element))
@@ -528,8 +580,89 @@ def _confirm_after(page, loc):
         pass
 
 
+def _is_choices(loc):
+    # A Choices.js drop-down: the real <select> is hidden and a styled list in front of it is what a person uses.
+    try:
+        return bool(loc.evaluate("e => e.tagName === 'SELECT' && !!e.closest('.choices') && (e.getAttribute('data-choice') === 'active' || e.classList.contains('choices__input'))"))
+    except Exception:
+        return False
+
+
+def _choice_index(rows, value):
+    # rows: [data-value, text] of the entries offered. Exact value, then exact text, then text that contains the wanted words.
+    low = str(value).strip().lower()
+    for i, (v, t) in enumerate(rows):
+        if str(value) == v or str(value) == t:
+            return i
+    for i, (v, t) in enumerate(rows):
+        if low == str(v).lower() or low == str(t).lower():
+            return i
+    if low:
+        for i, (v, t) in enumerate(rows):
+            if low in str(t).lower():
+                return i
+    return None
+
+
+def _pick_choices(page, loc, value, timeout=15000):
+    wrapper = loc.locator("xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' choices ')][1]").first
+    rows_loc = wrapper.locator(".choices__list--dropdown .choices__item--choice:not(.choices__placeholder):not(.is-disabled):not(.has-no-choices)")
+    chosen = wrapper.locator(".choices__item[data-value]:not(.choices__item--choice), .choices__list--single .choices__item")
+    waited = 0
+    rows = []
+    while waited < timeout:
+        try:
+            chips = chosen.evaluate_all("els => els.map(e => [e.getAttribute('data-value') || '', (e.innerText || '').trim()])")
+            if chips and _choice_index([c for c in chips if c[0]], value) is not None:
+                print("[IR-CHOICE] '" + str(value) + "' is already selected in this list", flush=True)
+                return
+            if not wrapper.locator(".choices__list--dropdown.is-active").count():
+                wrapper.scroll_into_view_if_needed(timeout=2000)
+                wrapper.locator(".choices__inner").first.click(timeout=3000)
+                page.wait_for_timeout(400)
+            rows = rows_loc.evaluate_all("els => els.map(e => [e.getAttribute('data-value') || '', (e.innerText || '').trim()])")
+            if rows:
+                at = _choice_index(rows, value)
+                if at is None and _any_if_missing(loc, value):
+                    at = 0
+                    print("[IR-CHOICE] '" + str(value) + "' is not in the list; selecting the first entry '" + rows[0][1] + "' instead", flush=True)
+                if at is not None:
+                    rows_loc.nth(at).click(timeout=3000)
+                    page.wait_for_timeout(_pace_ms())
+                    page.keyboard.press("Escape")
+                    _quiet(page)
+                    return
+                if waited >= 4000:
+                    break
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+        waited += 500
+    names = ", ".join(t for v, t in rows if t)
+    if rows:
+        raise AssertionError("The option '" + str(value) + "' is not in the list. Options here: " + names + ". Change the value in the .env file, or set PICK_ANY_IF_MISSING=<field name> to take the first entry.")
+    raise AssertionError("The list for '" + str(value) + "' stayed empty (No choices to choose from). It may depend on another field, or it may still be loading.")
+
+
+def _fill_text(loc, value):
+    # A Choices.js search box only searches on real key presses, so it is typed into; every other field is filled.
+    try:
+        is_search = bool(loc.evaluate("e => e.classList.contains('choices__input--cloned')"))
+    except Exception:
+        is_search = False
+    if not is_search:
+        loc.fill(value)
+        return
+    loc.click()
+    loc.fill("")
+    loc.press_sequentially(str(value), delay=120)
+    loc.page.wait_for_timeout(1200)
+
+
 def _pick(page, loc, value, timeout=15000):
     # Choose a drop-down entry only once the list is enabled and the wanted entry is in it (lists that load after another field).
+    if _is_choices(loc):
+        return _pick_choices(page, loc, value, timeout)
     try:
         loc.wait_for(state="visible", timeout=timeout)
     except Exception:
@@ -776,6 +909,87 @@ def _popup_texts(page):
         }).map(e => (e.innerText || '').trim()).filter(t => t)""", _POPUP_SELECTOR)
     except Exception:
         return []
+
+
+_DUPLICATE_WORDS = re.compile(r"already\s+exists?|already\s+(has|have|been)\s+(a\s+|an\s+)?(job\s+separation\s+)?(proposal|record|created|submitted)|duplicate", re.I)
+_LAST_PICK = {}
+
+_NOTICE_JS = """() => {
+    const out = [];
+    document.querySelectorAll('body *').forEach(e => {
+        if (e.children.length > 3) return;
+        const t = (e.innerText || '').trim();
+        if (!t || t.length > 300) return;
+        const r = e.getBoundingClientRect(); const s = getComputedStyle(e);
+        if (r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none') out.push(t);
+    });
+    return out;
+}"""
+
+
+def _page_notices(page):
+    # Short visible texts anywhere on the page or in its frames (pop-ups, toasts, banners), whatever their markup.
+    out = []
+    for scope in [page] + [f for f in page.frames if f != page.main_frame]:
+        try:
+            out += [" ".join(t.split()) for t in scope.evaluate(_NOTICE_JS)]
+        except Exception:
+            continue
+    return out
+
+
+def _duplicate_notice(page):
+    # Text of any visible notice that says a record already exists, wherever the page shows it. "" when none.
+    if os.environ.get("STOP_ON_DUPLICATE", "on").lower() in ("off", "false", "0", "no"):
+        return ""
+    for text in _page_notices(page):
+        if _DUPLICATE_WORDS.search(text):
+            return text[:200]
+    return ""
+
+
+_SAVED_WORDS = re.compile(r"successfully|has\s+been\s+(created|saved|submitted|sent)|(created|saved|submitted)\s+successfully|record\s+(is\s+|was\s+)?(created|saved)", re.I)
+
+
+def _saved_notice(page):
+    for text in _page_notices(page):
+        if _SAVED_WORDS.search(text) and not _DUPLICATE_WORDS.search(text):
+            return text[:200]
+    return ""
+
+
+def _await_saved(page, seconds=8):
+    # After the form closed: wait for proof. Returns "" when a confirmation was seen, "STOP: ..." otherwise.
+    for _ in range(int(seconds * 2)):
+        stop = _duplicate_stop(page)
+        if stop:
+            return stop
+        saved = _saved_notice(page)
+        if saved:
+            print("[IR-CREATED] the page said: " + saved, flush=True)
+            return ""
+        page.wait_for_timeout(500)
+    if os.environ.get("ACCEPT_SAVE_WITHOUT_MESSAGE", "off").lower() in ("on", "true", "1", "yes"):
+        print("[IR-CREATED] the form closed after Create (no message was seen; accepted because ACCEPT_SAVE_WITHOUT_MESSAGE is on)", flush=True)
+        return ""
+    msg = ("The form closed after Create, but the application showed no confirmation that the record was saved, so the run cannot call it a pass. "
+           "Check the list in the application. If this application saves without any message, set ACCEPT_SAVE_WITHOUT_MESSAGE=on in .env.")
+    print("[IR-STOP] " + msg, flush=True)
+    return "STOP: " + msg
+
+
+def _duplicate_stop(page, wait_ms=0):
+    # Returns "STOP: ..." when the application says the record already exists, so the run ends with a clear message instead of reporting a pass.
+    if wait_ms:
+        page.wait_for_timeout(wait_ms)
+    text = _duplicate_notice(page)
+    if not text:
+        return ""
+    who = _LAST_PICK.get("key") or "the selected employee"
+    msg = ("The application refused the record: \"" + text + "\" (employee " + str(who) + "). A record already exists for this employee, so the scenario was stopped and nothing new was created. "
+           "Pick another employee (this employee is now remembered and is tried last on the next run; set EMPLOYEE_PIN to choose one) or close the existing record in the application, then run again.")
+    print("[IR-STOP] " + msg, flush=True)
+    return "STOP: " + msg
 
 
 _CREATE_BUTTON_JS = """() => Array.from(document.querySelectorAll('button, input[type=button], input[type=submit], a')).some(e => {
@@ -1046,6 +1260,65 @@ def _click_radio_group(page, hint):
     return True
 
 
+_SUGGESTIONS = ".ui-autocomplete:visible .ui-menu-item, .ui-menu:visible .ui-menu-item"
+
+
+def _type_ahead(page, loc, value, seconds=8):
+    # A field whose suggestion list appears while typing (a jQuery UI autocomplete). The list comes from the server and can be slow, so the
+    # test waits for it, and types the last character again once if it did not appear. When no suggestion ever shows, the run stops with the reason.
+    value = str(value)
+    for attempt in range(2):
+        loc.click()
+        loc.fill("")
+        loc.press_sequentially(value, delay=150)
+        waited = 0
+        while waited < seconds * 1000:
+            try:
+                if page.locator(_SUGGESTIONS).count() > 0:
+                    return
+            except Exception:
+                pass
+            page.wait_for_timeout(250)
+            waited += 250
+        if attempt == 0:
+            print("[IR-RETRY] no suggestion appeared for '" + value + "'; typing again", flush=True)
+    raise AssertionError("No suggestion appeared for '" + value + "' in " + str(seconds * 2) + " seconds, so the application found no match. Check that this value exists and can be chosen in this field, then change it in the .env file (for a PIN: EMPLOYEE_PIN, or supervisorName).")
+
+
+def _force_click(loc, name):
+    # Last resort after a normal click failed: send the click event straight to the element. When that element is not even visible the click
+    # most likely hit a hidden copy (an id reused by another list), so the run says so instead of passing quietly.
+    el = loc.first
+    try:
+        shown = el.is_visible()
+    except Exception:
+        shown = False
+    if not shown:
+        print("[IR-WARN] '" + str(name) + "' is not visible; a click event was sent to a hidden element. If a later step fails, this click did nothing.", flush=True)
+    el.dispatch_event("click", timeout=3000)
+
+
+def _click_by_text(page, hint, seconds=4):
+    # The recorded element could not be found by its id (a list entry whose id changes). Click the visible entry that shows the same words;
+    # a leading id such as "4[30] Dhaka" is also tried without that number.
+    tries = [hint]
+    bare = re.sub(r"^\d+(?=\[)", "", hint)
+    if bare != hint:
+        tries.append(bare)
+    for text in tries:
+        found = page.get_by_text(text).filter(visible=True)
+        for _ in range(int(seconds * 4)):
+            try:
+                if found.count() > 0:
+                    found.first.click(timeout=3000)
+                    print("[IR-CHOICE] the recorded entry was not found by its id; clicked the entry that shows '" + text + "'", flush=True)
+                    return True
+            except Exception:
+                pass
+            page.wait_for_timeout(250)
+    return False
+
+
 def _click(page, loc, timeout=5000, hint=""):
     # A normal click, except that a radio button is checked afterwards to make sure it really got selected.
     el = loc.first
@@ -1053,6 +1326,8 @@ def _click(page, loc, timeout=5000, hint=""):
         el.wait_for(state="attached", timeout=timeout)
     except Exception:
         if hint and _click_radio_group(page, hint):
+            return
+        if hint and _click_by_text(page, hint):
             return
         raise
     try:
@@ -1098,11 +1373,17 @@ def _creation_problem(page, seconds=20, strict=True):
     url0 = page.url
     seen_popup = False
     for i in range(int(seconds * 2)):
+        stop = _duplicate_stop(page)
+        if stop:
+            return stop
         texts = _popup_texts(page)
         for text in texts:
             if _PROBLEM_WORDS.search(text):
                 return text
         if any(_DONE_WORDS.search(text) for text in texts):
+            stop = _duplicate_stop(page)
+            if stop:
+                return stop
             print("[IR-CREATED] the page said: " + " | ".join(t.strip()[:120] for t in texts if _DONE_WORDS.search(t)), flush=True)
             return ""
         if texts:
@@ -1115,13 +1396,15 @@ def _creation_problem(page, seconds=20, strict=True):
         except Exception:
             still_open = True
         if (not still_open and i >= 1) or page.url != url0:
-            print("[IR-CREATED] the form closed after Create (no message was seen)", flush=True)
-            return ""
+            return _await_saved(page)
         if i == 6 and not texts:
             missing = _unfilled_required(page)
             if missing:
                 return "STOP: Create did not go through. These required fields are still empty: " + ", ".join(missing) + "."
         page.wait_for_timeout(500)
+    stop = _duplicate_stop(page)
+    if stop:
+        return stop
     if not strict or seen_popup:
         return ""
     missing = _unfilled_required(page)
@@ -1139,6 +1422,9 @@ def _wait_for_confirm_or_error(page, seconds=6):
                 return ""
         except Exception:
             pass
+        stop = _duplicate_stop(page)
+        if stop:
+            return stop
         for text in _popup_texts(page):
             if _PROBLEM_WORDS.search(text):
                 return text
@@ -1233,6 +1519,8 @@ def _note_employee(row):
 def _note_employee_key(key):
     import json
     import time
+    if key:
+        _LAST_PICK["key"] = key
     if os.environ.get("EMPLOYEE_MEMORY", "on").lower() in ("off", "false", "0", "no"):
         return
     if not key:
@@ -1396,7 +1684,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
     if cls.startswith('Test'):
         cls=cls[4:] or 'GeneratedPage'
     elements=ir.get('elements') or {}; params=ir.get('parameters') or {}
-    page_lines=['from playwright.sync_api import Page, Locator','','class '+cls+':','    def __init__(self, page: Page):','        self.page = page','']
+    page_lines=['from playwright.sync_api import Page, Locator','','']+_RESOLVE_HELPER.split('\n')+['','class '+cls+':','    def __init__(self, page: Page):','        self.page = page','']
     elem_methods={}
     locator_actions={'click','fill','select','check','uncheck','uploadFile','assert','extractValue'}
     required_keys={
@@ -1598,6 +1886,9 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     lines.append('                _picked = _how')
                     lines.append('                break')
                     lines.append('        print("[IR-ROW] row picked by " + (_picked or "no method; the list stayed open"), flush=True)')
+                    lines.append('        _dup = _duplicate_stop(page, 1500)')
+                    lines.append('        if _dup:')
+                    lines.append('            raise AssertionError(_dup[6:])')
                     lines.append('    else:')
                     lines.append('        try:')
                     lines.append(f'            {loc}.first.click(timeout=5000)')
@@ -1639,10 +1930,13 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                         lines.append(f'        print({_json(_warn)}, flush=True)')
                         lines.append(f'        page.goto(_join_url(base_url, {_json(rel)}))')
                     else:
-                        lines.append(f'        {loc}.first.dispatch_event("click", timeout=3000)')
+                        lines.append(f'        _force_click({loc}, {_json(str(key))})')
                     lines.append('    _quiet(page)')
             elif action=='fill':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
+                # A recorded name (for example the search box that every Choices.js drop-down carries) can match many inputs, most of them hidden.
+                # Only the visible one can be typed into, so the step waits for, and uses, the first visible match.
+                loc=f'{loc}.filter(visible=True).first'
                 v=step.get('value') or {}; ref=str(v.get('reference') or 'VALUE')
                 next_step=ordered_steps[step_index+1] if step_index+1 < len(ordered_steps) else {}
                 next_element=elements.get(str(next_step.get('element'))) or {}
@@ -1651,17 +1945,23 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
                     for x in _candidate_list(next_element)
                     if x.get('strategy')=='id'
                 }
+                # A type-ahead list (the page shows suggestions while a person types, then the recording clicks one) only reacts to real key presses.
+                # So a fill that is followed by a click on something that is not a button is typed key by key and given a moment to show its list.
                 autocomplete_fill=(
                     next_step.get('action')=='click'
-                    and 'ui-active-menuitem' in next_ids
+                    and ('ui-active-menuitem' in next_ids
+                         or (v.get('source')!='secret' and not _is_button_element(next_element) and str(next_step.get('element') or '')!=str(key)))
                 )
                 lines.append(f'    {loc}.wait_for(state="visible", timeout=15000)')
-                if autocomplete_fill:
+                if 'ui-active-menuitem' in next_ids and next_step.get('action')=='click':
+                    lines.append(f'    _type_ahead(page, {loc}, _setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}))')
+                elif autocomplete_fill:
                     lines.append(f'    {loc}.click()')
                     lines.append(f'    {loc}.fill("")')
                     lines.append(f'    {loc}.press_sequentially(_setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}), delay=150)')
+                    lines.append('    page.wait_for_timeout(1200)')
                 else:
-                    lines.append(f'    {loc}.fill(_setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}))')
+                    lines.append(f'    _fill_text({loc}, _setting({_json(ref)}{", True" if v.get("source")=="secret" else ""}))')
                     lines.append('    _quiet(page)')
             elif action=='select':
                 if not loc: raise GeneratorError(f'IR step {sid} requires a locator for element {key}.', 'UNSUPPORTED_LOCATOR', [str(key)])
@@ -1708,7 +2008,7 @@ def _python_project(ir: dict[str,Any]) -> tuple[dict[str,str],dict[str,Any]]:
         if block_end is None: block_end=len(lines)
         _wraps.append((block_start,block_end,['    def _attempt(_skip):'],[
             '        return _creation_problem(page)','',
-            '    _tries = 0','    while True:','        try:','            _problem = _attempt(_tries)','        except _NotShown as _gone:','            _problem = str(_gone)','        if not _problem:','            break','        if _problem.startswith("STOP: "):','            raise AssertionError(_problem[6:])',
+            '    _tries = 0','    while True:','        try:','            _problem = _attempt(_tries)','        except _NotShown as _gone:','            _problem = _duplicate_stop(page) or str(_gone)','        except Exception:','            _problem = _duplicate_stop(page)','            if not _problem:','                raise','        if not _problem:','            break','        if _problem.startswith("STOP: "):','            raise AssertionError(_problem[6:])',
             '        print("[IR-RETRY] employee " + str(_tries + 1) + " was rejected: " + " ".join(_problem.split())[:300], flush=True)',
             '        _tries += 1','        if _tries >= 10:',
             '            raise AssertionError("The proposal could not be created with any of the first 10 employees. Last message: " + " ".join(_problem.split())[:300])',
